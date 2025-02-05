@@ -184,6 +184,60 @@ def agregar_inventario():
         cursor.close()
         conn.close()
 
+
+@app.route('/api/nuevo_producto', methods=['POST'])
+def nuevo_producto():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
+
+    grupo = data.get('grupo')
+    nombre_producto = data.get('nombre_producto')  # Nombre original para referencia
+    columna = data.get('columna')  # Ej. "merch_lapicero_esco"
+    cantidad = data.get('cantidad', 0)
+
+    if grupo not in ['kossodo', 'kossomet']:
+        return jsonify({"error": "El grupo debe ser 'kossodo' o 'kossomet'."}), 400
+    if not columna or not nombre_producto:
+        return jsonify({"error": "Faltan datos: nombre_producto o columna."}), 400
+
+    table_name = f"inventario_merch_{grupo}"
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"error": "Error de conexión a la base de datos"}), 500
+
+    cursor = conn.cursor()
+    try:
+        # Verificar si la columna ya existe en la tabla usando information_schema
+        query_check = """
+            SELECT COUNT(*) FROM information_schema.COLUMNS 
+            WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s;
+        """
+        db_name = os.environ.get('MYSQL_DATABASE')
+        cursor.execute(query_check, (db_name, table_name, columna))
+        (existe,) = cursor.fetchone()
+
+        if existe == 0:
+            # La columna no existe; se procede a crearla
+            query_alter = f"ALTER TABLE {table_name} ADD COLUMN {columna} INT DEFAULT 0;"
+            cursor.execute(query_alter)
+            conn.commit()
+
+        # Insertar un registro en el inventario con la cantidad inicial en la columna nueva.
+        # Nota: Si ya existen registros, quizá se desee actualizar en lugar de insertar; este ejemplo inserta un registro nuevo.
+        query_insert = f"INSERT INTO {table_name} ({columna}) VALUES (%s);"
+        cursor.execute(query_insert, (cantidad,))
+        conn.commit()
+        nuevo_id = cursor.lastrowid
+
+        return jsonify({"message": "Nuevo producto agregado correctamente", "id": nuevo_id}), 201
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
 #######################################
 # Endpoint para Solicitudes
 #######################################
