@@ -58,6 +58,7 @@ for table in TABLES_MERCH:
     table_queries[table] = f"CREATE TABLE IF NOT EXISTS {table} ({columns_merch_str});"
 
 # Tabla para las solicitudes de inventario
+# Se almacenarán los productos solicitados en formato JSON en el campo 'productos'
 solicitudes_columns = [
     "id INT AUTO_INCREMENT PRIMARY KEY",
     "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP",
@@ -66,7 +67,7 @@ solicitudes_columns = [
     "ruc VARCHAR(50)",
     "fecha_visita DATE",
     "cantidad_packs INT DEFAULT 0",
-    "productos TEXT",       -- Se almacenarán los productos solicitados (por ejemplo, en formato JSON)
+    "productos TEXT",
     "catalogos TEXT"
 ]
 table_queries["inventario_solicitudes"] = f"CREATE TABLE IF NOT EXISTS inventario_solicitudes ({', '.join(solicitudes_columns)});"
@@ -110,7 +111,7 @@ def obtener_inventario():
     if tabla_param not in ['kossodo', 'kossomet']:
         return jsonify({"error": "Parámetro 'tabla' inválido. Use 'kossodo' o 'kossomet'."}), 400
 
-    table_name = f"inventario_merch_{'kossodo' if tabla_param == 'kossodo' else 'kossomet'}"
+    table_name = f"inventario_merch_{tabla_param}"
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
@@ -134,7 +135,7 @@ def agregar_inventario():
     if tabla_param not in ['kossodo', 'kossomet']:
         return jsonify({"error": "Parámetro 'tabla' inválido. Use 'kossodo' o 'kossomet'."}), 400
 
-    table_name = f"inventario_merch_{'kossodo' if tabla_param == 'kossodo' else 'kossomet'}"
+    table_name = f"inventario_merch_{tabla_param}"
     data = request.get_json()
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
