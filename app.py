@@ -238,6 +238,116 @@ def nuevo_producto():
         cursor.close()
         conn.close()
 
+@app.route('/api/stock', methods=['GET'])
+def obtener_stock():
+    import json  # Asegúrate de tener importado json (si no se ha hecho al inicio)
+    
+    grupo = request.args.get('grupo')
+    if grupo not in ['kossodo', 'kossomet']:
+        return jsonify({"error": "Grupo inválido. Use 'kossodo' o 'kossomet'."}), 400
+
+    inventario_table = f"inventario_merch_{grupo}"
+    stock_table = f"inventario_stock_{grupo}"
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"error": "Error de conexión a la base de datos"}), 500
+
+    cursor = conn.cursor(dictionary=True)
+    try:
+        db_name = DB_CONFIG['database']
+        # 1. Obtener las columnas que comienzan con "merch_" en la tabla de inventario.
+        query_cols = """
+            SELECT COLUMN_NAME 
+            FROM information_schema.COLUMNS 
+            WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME LIKE 'merch\\_%'
+        """
+        cursor.execute(query_cols, (db_name, inventario_table))
+        cols = [row['COLUMN_NAME'] for row in cursor.fetchall()]
+        
+        # 2. Calcular los totales de inventario para cada producto.
+        inventory_totals = {}
+        for col in cols:
+            query_sum = f"SELECT SUM(`{col}`) AS total FROM {inventario_table}"
+            cursor.execute(query_sum)
+            result = cursor.fetchone()
+            total = result['total'] if result['total'] is not None else 0
+            inventory_totals[col] = total
+
+        # 3. Calcular el total solicitado para cada producto.
+        # Se crea un diccionario con cero para cada columna.
+        request_totals = {col: 0 for col in cols}
+        query_sol = "SELECT cantidad_packs, productos FROM inventario_solicitudes WHERE grupo = %s"
+        cursor.execute(query_sol, (grupo,))
+        sol_rows = cursor.fetchall()
+        for row in sol_rows:
+            cantidad = row['cantidad_packs'] if row['cantidad_packs'] is not None else 0
+            try:
+                productos_list = json.loads(row['productos']) if row['productos'] else []
+            except Exception:
+                productos_list = []
+            # Para cada producto solicitado, se suma la cantidad de packs.
+            for prod in productos_list:
+                if prod in request_totals:
+                    request_totals[prod] += cantidad
+
+        # 4. Calcular el stock: inventario - solicitudes.
+        stock = {}
+        for col in cols:
+            stock[col] = inventory_totals.get(col, 0) - request_totals.get(col, 0)
+
+        # 5. Crear la tabla de stock si no existe y actualizarla.
+        create_stock_query = f"""
+            CREATE TABLE IF NOT EXISTS {stock_table} (
+                id INT PRIMARY KEY,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+        """
+        cursor.execute(create_stock_query)
+        conn.commit()
+
+        # Verificar qué columnas existen en la tabla de stock.
+        query_cols_stock = """
+            SELECT COLUMN_NAME 
+            FROM information_schema.COLUMNS 
+            WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME LIKE 'merch\\_%'
+        """
+        cursor.execute(query_cols_stock, (db_name, stock_table))
+        stock_cols_existing = {row['COLUMN_NAME'] for row in cursor.fetchall()}
+
+        # Para cada columna de inventario, agregarla a la tabla de stock si no existe.
+        for col in cols:
+            if col not in stock_cols_existing:
+                alter_query = f"ALTER TABLE {stock_table} ADD COLUMN {col} INT DEFAULT 0;"
+                cursor.execute(alter_query)
+                conn.commit()
+
+        # Actualizar (o insertar) una única fila (con id = 1) en la tabla de stock.
+        # Se usa INSERT ... ON DUPLICATE KEY UPDATE para mantener una única fila.
+        columns_list = ', '.join([f"`{col}`" for col in cols])
+        placeholders = ', '.join(['%s'] * len(cols))
+        values = [stock[col] for col in cols]
+        update_parts = ', '.join([f"`{col}` = VALUES(`{col}`)" for col in cols])
+        insert_query = f"""
+            INSERT INTO {stock_table} (id, {columns_list})
+            VALUES (1, {placeholders})
+            ON DUPLICATE KEY UPDATE {update_parts};
+        """
+        cursor.execute(insert_query, values)
+        conn.commit()
+
+        # 6. Obtener la fila actualizada de la tabla de stock y retornarla.
+        cursor.execute(f"SELECT * FROM {stock_table} WHERE id = 1;")
+        stock_row = cursor.fetchone()
+        return jsonify(stock_row), 200
+
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+
 #######################################
 # Endpoint para Solicitudes
 #######################################
