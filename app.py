@@ -347,25 +347,7 @@ def obtener_stock():
         cursor.close()
         conn.close()
 
-@app.route('/api/conf_solicitudes', methods=['GET'])
-def obtener_solicitudes_conf():
-    """
-    Retorna todos los registros de la tabla inventario_solicitudes.
-    Se asume que estas solicitudes están pendientes de confirmación.
-    """
-    conn = get_db_connection()
-    if conn is None:
-        return jsonify({"error": "Error de conexión a la base de datos"}), 500
-    cursor = conn.cursor(dictionary=True)
-    try:
-        cursor.execute("SELECT * FROM inventario_solicitudes")
-        rows = cursor.fetchall()
-        return jsonify(rows), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
+
 
 
 @app.route('/api/conf_solicitudes', methods=['POST'])
@@ -377,8 +359,9 @@ def confirmar_solicitud():
       - solicitante, grupo, ruc, fecha_visita, cantidad_packs, catalogos
       - y para cada producto, claves que comienzan con "merch_" con las cantidades confirmadas.
     Se crea (si no existe) o actualiza la tabla inventario_solicitudes_conf para almacenar la confirmación.
+    Finalmente, se elimina la solicitud aprobada de la tabla inventario_solicitudes.
     """
-    import json  # en caso de no estar importado aún
+    import json  # en caso de no estar importado
     data = request.get_json()
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
@@ -387,7 +370,6 @@ def confirmar_solicitud():
     if not solicitud_id:
         return jsonify({"error": "Falta el id de la solicitud."}), 400
 
-    # Se esperan los campos básicos:
     solicitante = data.get("solicitante")
     grupo = data.get("grupo")
     ruc = data.get("ruc")
@@ -398,12 +380,13 @@ def confirmar_solicitud():
     if not (solicitante and grupo and ruc and fecha_visita):
         return jsonify({"error": "Faltan campos requeridos: solicitante, grupo, ruc o fecha_visita."}), 400
 
-    # Extraer claves de productos: todas aquellas que inician con "merch_"
+    # Extraer claves de producto (todas las que comienzan con "merch_")
     product_keys = [k for k in data.keys() if k.startswith("merch_")]
 
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
+
     cursor = conn.cursor()
     try:
         # 1. Crear la tabla inventario_solicitudes_conf si no existe
@@ -422,7 +405,7 @@ def confirmar_solicitud():
         cursor.execute(create_table_query)
         conn.commit()
 
-        # 2. Verificar qué columnas de productos existen en inventario_solicitudes_conf
+        # 2. Verificar qué columnas de producto existen en inventario_solicitudes_conf
         db_name = os.environ.get('MYSQL_DATABASE')
         query_cols = """
             SELECT COLUMN_NAME 
@@ -432,7 +415,7 @@ def confirmar_solicitud():
         cursor.execute(query_cols, (db_name, "inventario_solicitudes_conf"))
         existing_cols = {row[0] for row in cursor.fetchall()}
 
-        # 3. Para cada clave de producto en el payload, si no existe, se agrega la columna
+        # 3. Para cada clave de producto en el payload, si no existe, agregarla
         for key in product_keys:
             if key not in existing_cols:
                 alter_query = f"ALTER TABLE inventario_solicitudes_conf ADD COLUMN {key} INT DEFAULT 0;"
@@ -440,7 +423,6 @@ def confirmar_solicitud():
                 conn.commit()
 
         # 4. Construir la lista de columnas y valores a insertar/actualizar.
-        # Se usará el id de la solicitud como PRIMARY KEY.
         columns = ["id", "solicitante", "grupo", "ruc", "fecha_visita", "cantidad_packs", "catalogos"]
         values = [solicitud_id, solicitante, grupo, ruc, fecha_visita, cantidad_packs, catalogos]
         for key in product_keys:
@@ -448,7 +430,6 @@ def confirmar_solicitud():
             values.append(data.get(key, 0))
         columns_str = ", ".join("`" + col + "`" for col in columns)
         placeholders = ", ".join(["%s"] * len(columns))
-        # Actualizar todos los campos (excepto id) en caso de duplicado.
         update_parts = ", ".join("`" + col + "` = VALUES(`" + col + "`)" for col in columns if col != "id")
         insert_query = f"""
             INSERT INTO inventario_solicitudes_conf ({columns_str})
@@ -457,13 +438,21 @@ def confirmar_solicitud():
         """
         cursor.execute(insert_query, tuple(values))
         conn.commit()
-        return jsonify({"message": "Solicitud confirmada correctamente", "id": solicitud_id}), 200
+
+        # 5. Eliminar la solicitud de la tabla original inventario_solicitudes
+        delete_query = "DELETE FROM inventario_solicitudes WHERE id = %s;"
+        cursor.execute(delete_query, (solicitud_id,))
+        conn.commit()
+
+        return jsonify({"message": "Solicitud confirmada y eliminada de pendientes correctamente", "id": solicitud_id}), 200
+
     except Exception as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         cursor.close()
         conn.close()
+
 
 #######################################
 # Endpoint para Solicitudes
