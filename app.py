@@ -80,18 +80,13 @@ conf_columns = [
     "solicitud_id INT NOT NULL",
     "confirmador VARCHAR(255) NOT NULL",
     "observaciones TEXT",
-    "merch_lapiceros_normales INT DEFAULT 0",
-    "merch_lapicero_ejecutivos INT DEFAULT 0",
-    "merch_blocks INT DEFAULT 0",
-    "merch_tacos INT DEFAULT 0",
-    "merch_gel_botella INT DEFAULT 0",
-    "merch_bolas_antiestres INT DEFAULT 0",
-    "merch_padmouse INT DEFAULT 0",
-    "merch_bolsa INT DEFAULT 0",
-    "merch_lapiceros_esco INT DEFAULT 0",
+    "productos TEXT",  # Aquí se guardará la información en formato JSON
     "FOREIGN KEY (solicitud_id) REFERENCES inventario_solicitudes(id)"
 ]
-table_queries["inventario_solicitudes_conf"] = f"CREATE TABLE IF NOT EXISTS inventario_solicitudes_conf ({', '.join(conf_columns)});"
+
+table_queries["inventario_solicitudes_conf"] = (
+    f"CREATE TABLE IF NOT EXISTS inventario_solicitudes_conf ({', '.join(conf_columns)});"
+)
 
 
 def get_db_connection():
@@ -492,7 +487,7 @@ def confirmar_solicitud(solicitud_id):
 
     confirmador = data.get('confirmador')
     observaciones = data.get('observaciones', "")
-    productos_finales = data.get('productos', {})
+    productos_finales = data.get('productos', {})  # Se espera un diccionario, ej: {"merch_lapicero_clasico": 5, "merch_padmouse": 5}
 
     if not confirmador:
         return jsonify({"error": "El campo 'confirmador' es requerido."}), 400
@@ -518,40 +513,25 @@ def confirmar_solicitud(solicitud_id):
         conf_table = "inventario_solicitudes_conf"
         inv_table = f"inventario_merch_{grupo}"
 
-        # 2. Asegurar que todas las columnas existan en ambas tablas
-        # (Solo para aquellas que empiecen con merch_)
-        for col_name in productos_finales.keys():
-            if col_name.startswith('merch_'):
-                ensure_column_exists(cursor, conf_table, col_name)
-                ensure_column_exists(cursor, inv_table, col_name)
+        # 2. Insertar el registro de confirmación con los datos en formato JSON
+        import json
+        productos_json = json.dumps(productos_finales) if productos_finales else None
+        insert_sql = f"""
+            INSERT INTO {conf_table} (solicitud_id, confirmador, observaciones, productos)
+            VALUES (%s, %s, %s, %s)
+        """
+        cursor.execute(insert_sql, (solicitud_id, confirmador, observaciones, productos_json))
 
-        # Hacemos commit tras la creación de columnas (si es que se crearon)
-        conn.commit()
-
-        # 3. Insertar el registro de confirmación
-        base_cols = ['solicitud_id', 'confirmador', 'observaciones']
-        prod_cols = list(productos_finales.keys())  # p. ej. ['merch_lapicero_clasico', ...]
-        all_cols = base_cols + prod_cols
-
-        cols_str = ", ".join(all_cols)  # "solicitud_id, confirmador, observaciones, merch_xxx, ..."
-        placeholders = ", ".join(["%s"] * len(all_cols))
-        insert_sql = f"INSERT INTO {conf_table} ({cols_str}) VALUES ({placeholders})"
-
-        valores = [solicitud_id, confirmador, observaciones] + [
-            productos_finales[col] for col in prod_cols
-        ]
-        cursor.execute(insert_sql, tuple(valores))
-
-        # 4. Actualizar el estado de la solicitud a 'confirmed'
+        # 3. Actualizar el estado de la solicitud a 'confirmed'
         cursor.execute(
             "UPDATE inventario_solicitudes SET status = 'confirmed' WHERE id = %s",
             (solicitud_id,)
         )
 
-        # 5. Registrar la salida en inventario (insertamos valores negativos)
+        # 4. Registrar la salida en inventario (insertamos valores negativos)
         if productos_finales:
             inv_cols = ['responsable'] + list(productos_finales.keys())
-            # Por ejemplo, inv_cols = ['responsable', 'merch_lapicero_clasico', 'merch_blocks', ...]
+            # Por ejemplo, inv_cols = ['responsable', 'merch_lapicero_clasico', 'merch_padmouse', ...]
             inv_vals = [f"Confirmación {solicitud_id}"] + [
                 -abs(qty) for qty in productos_finales.values()
             ]
@@ -571,6 +551,7 @@ def confirmar_solicitud(solicitud_id):
     finally:
         cursor.close()
         conn.close()
+
 
 
 def ensure_column_exists(cursor, table_name, column_name):
