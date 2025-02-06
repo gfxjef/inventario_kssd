@@ -508,77 +508,59 @@ def confirmar_solicitud(solicitud_id):
             return jsonify({"error": f"La solicitud no está pendiente (status actual: {solicitud['status']})."}), 400
 
         grupo = solicitud['grupo']
-        db_name = 'atusalud_kossomet'  # Usando el nombre exacto de la BD
         conf_table = "inventario_solicitudes_conf"
         inv_table = f"inventario_merch_{grupo}"
 
-        # 2. Crear tabla de confirmaciones si no existe
-        create_conf_table = """
-        CREATE TABLE IF NOT EXISTS inventario_solicitudes_conf (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            solicitud_id INT NOT NULL,
-            confirmador VARCHAR(255) NOT NULL,
-            observaciones TEXT,
-            merch_lapiceros_normales INT DEFAULT 0,
-            merch_lapicero_ejecutivos INT DEFAULT 0,
-            merch_blocks INT DEFAULT 0,
-            merch_tacos INT DEFAULT 0,
-            merch_gel_botella INT DEFAULT 0,
-            merch_bolas_antiestres INT DEFAULT 0,
-            merch_padmouse INT DEFAULT 0,
-            merch_bolsa INT DEFAULT 0,
-            merch_lapiceros_esco INT DEFAULT 0,
-            FOREIGN KEY (solicitud_id) REFERENCES inventario_solicitudes(id)
-        );
-        """
-        cursor.execute(create_conf_table)
-        conn.commit()
+        # 2. Asegurar que todas las columnas existan en ambas tablas
+        for col_name in productos_finales.keys():
+            if col_name.startswith('merch_'):
+                print(f"Verificando columna {col_name}")  # Log para debug
+                # Verificar/crear en tabla de confirmaciones
+                ensure_column_exists(cursor, conf_table, col_name)
+                # Verificar/crear en tabla de inventario
+                ensure_column_exists(cursor, inv_table, col_name)
+                conn.commit()  # Commit después de cada creación de columna
 
-        # 3. Insertar confirmación
-        columns = ['solicitud_id', 'confirmador', 'observaciones']
-        values = [solicitud_id, confirmador, observaciones]
+        # 3. Insertar el registro de confirmación
+        base_cols = ['solicitud_id', 'confirmador', 'observaciones']
+        prod_cols = list(productos_finales.keys())
+        all_cols = base_cols + prod_cols
         
-        # Agregar productos a las columnas y valores
-        for prod_name, qty in productos_finales.items():
-            if prod_name.startswith('merch_'):
-                columns.append(prod_name)
-                values.append(qty)
-
-        columns_str = ", ".join(columns)
-        placeholders = ", ".join(["%s"] * len(values))
-        insert_sql = f"INSERT INTO {conf_table} ({columns_str}) VALUES ({placeholders})"
+        cols_str = ", ".join(all_cols)
+        placeholders = ", ".join(["%s"] * len(all_cols))
+        insert_sql = f"INSERT INTO {conf_table} ({cols_str}) VALUES ({placeholders})"
         
-        cursor.execute(insert_sql, tuple(values))
+        valores = [solicitud_id, confirmador, observaciones] + [
+            productos_finales[col] for col in prod_cols
+        ]
+        
+        cursor.execute(insert_sql, tuple(valores))
 
-        # 4. Actualizar estado de la solicitud
+        # 4. Actualizar el estado de la solicitud
         cursor.execute(
             "UPDATE inventario_solicitudes SET status = 'confirmed' WHERE id = %s",
             (solicitud_id,)
         )
 
-        # 5. Registrar descuento en inventario
+        # 5. Registrar la salida en inventario
         if productos_finales:
-            inv_columns = ['responsable']
-            inv_values = [f"Confirmación {solicitud_id}"]
+            inv_cols = ['responsable'] + list(productos_finales.keys())
+            inv_vals = [f"Confirmación {solicitud_id}"] + [
+                -abs(qty) for qty in productos_finales.values()
+            ]
             
-            for prod_name, qty in productos_finales.items():
-                if prod_name.startswith('merch_'):
-                    inv_columns.append(prod_name)
-                    inv_values.append(-abs(qty))  # Valor negativo para indicar salida
-
-            inv_cols_str = ", ".join(inv_columns)
-            inv_placeholders = ", ".join(["%s"] * len(inv_values))
+            inv_cols_str = ", ".join(inv_cols)
+            inv_placeholders = ", ".join(["%s"] * len(inv_vals))
             inv_sql = f"INSERT INTO {inv_table} ({inv_cols_str}) VALUES ({inv_placeholders})"
             
-            cursor.execute(inv_sql, tuple(inv_values))
+            cursor.execute(inv_sql, tuple(inv_vals))
 
         conn.commit()
         return jsonify({"message": "Solicitud confirmada exitosamente"}), 200
 
     except Error as e:
         conn.rollback()
-        print(f"Error en confirmación: {str(e)}")  # Log del error
+        print(f"Error en confirmación: {str(e)}")  # Log para debug
         return jsonify({"error": str(e)}), 500
 
     finally:
@@ -587,6 +569,39 @@ def confirmar_solicitud(solicitud_id):
 
 
 
+
+def ensure_column_exists(cursor, table_name, column_name):
+    """
+    Verifica si una columna existe en la tabla y la crea si no existe.
+    
+    Args:
+        cursor: Cursor de MySQL
+        table_name: Nombre de la tabla
+        column_name: Nombre de la columna a verificar/crear
+    
+    Returns:
+        bool: True si la columna fue creada, False si ya existía
+    """
+    try:
+        db_name = os.environ.get('MYSQL_DATABASE')
+        # Verificar si la columna existe
+        query_check = """
+            SELECT COUNT(*) FROM information_schema.COLUMNS 
+            WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s;
+        """
+        cursor.execute(query_check, (db_name, table_name, column_name))
+        (existe,) = cursor.fetchone()
+
+        if existe == 0:
+            # Crear la columna si no existe
+            print(f"Creando columna {column_name} en tabla {table_name}")  # Log para debug
+            query_alter = f"ALTER TABLE {table_name} ADD COLUMN {column_name} INT DEFAULT 0;"
+            cursor.execute(query_alter)
+            return True
+        return False
+    except Error as e:
+        print(f"Error al verificar/crear columna {column_name}: {str(e)}")  # Log para debug
+        raise
 
 
 #######################################
