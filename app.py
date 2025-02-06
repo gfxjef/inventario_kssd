@@ -482,10 +482,12 @@ def obtener_solicitudes():
 @app.route('/api/solicitudes/<int:solicitud_id>/confirm', methods=['PUT'])
 def confirmar_solicitud(solicitud_id):
     """
+    Endpoint para confirmar una solicitud.
+
     JSON esperado:
     {
       "confirmador": "Nombre",
-      "observaciones": "...",
+      "observaciones": "Texto opcional",
       "productos": {
          "merch_lapicero_clasico": 5,
          "merch_blocks": 10,
@@ -510,96 +512,55 @@ def confirmar_solicitud(solicitud_id):
 
     cursor = conn.cursor(dictionary=True)
     try:
-        # 1. Verificar la solicitud
+        # 1. Verificar que la solicitud existe y su estado sea 'pending'
         cursor.execute("SELECT status, grupo FROM inventario_solicitudes WHERE id = %s", (solicitud_id,))
-        row = cursor.fetchone()
-        if not row:
+        solicitud = cursor.fetchone()
+        if not solicitud:
             return jsonify({"error": "La solicitud no existe."}), 404
+        if solicitud['status'] != 'pending':
+            return jsonify({"error": f"La solicitud no está pendiente (status actual: {solicitud['status']})."}), 400
 
-        if row['status'] != 'pending':
-            return jsonify({"error": f"La solicitud no está pendiente (status actual: {row['status']})."}), 400
-
-        grupo = row['grupo']  # "kossodo" o "kossomet"
-
-        db_name = DB_CONFIG['database']  # Ajusta con el nombre de tu BD
+        grupo = solicitud['grupo']  # Esperamos "kossodo" o "kossomet"
+        db_name = DB_CONFIG['database']  # Asegúrate de que coincide con tu base de datos real
         conf_table = "inventario_solicitudes_conf"
+        inv_table = f"inventario_merch_{grupo}"
 
-        # 2. Para cada columna en productos_finales, si no existe en inventario_solicitudes_conf la creamos.
+        # 2. Verificar (y crear si no existen) las columnas en la tabla de confirmaciones
         for col in productos_finales.keys():
             if not col.startswith("merch_"):
-                # Opcional: asegurarnos de que solo manejamos columnas merch_...
                 continue
+            # Utilizamos IF NOT EXISTS (MySQL 8.0+)
+            alter_sql = f"ALTER TABLE {conf_table} ADD COLUMN IF NOT EXISTS {col} INT DEFAULT 0;"
+            cursor.execute(alter_sql)
+            conn.commit()
 
-            # Verificar existencia de la columna en la tabla de confirmaciones
-            query_check = """
-                SELECT COUNT(*)
-                FROM information_schema.COLUMNS
-                WHERE TABLE_SCHEMA = %s
-                  AND TABLE_NAME = %s
-                  AND COLUMN_NAME = %s
-            """
-            cursor.execute(query_check, (db_name, conf_table, col))
-            (existe_col,) = cursor.fetchone()
-            if existe_col == 0:
-                # Crear la columna
-                alter_sql = f"ALTER TABLE {conf_table} ADD COLUMN {col} INT DEFAULT 0;"
-                cursor.execute(alter_sql)
-                conn.commit()
-
-        # 3. Insertar registro en la tabla de confirmaciones
-        #    (Solución dinámica que toma las columnas de productos_finales)
+        # 3. Insertar el registro de confirmación dinámicamente
         base_cols = ['solicitud_id', 'confirmador', 'observaciones']
-        # Agregamos las columnas de productos
-        prod_cols = list(productos_finales.keys())  # ej: ["merch_lapicero_clasico", "merch_blocks", ...]
-        all_cols = base_cols + prod_cols  # merge
-
-        # Construir la sentencia INSERT
+        prod_cols = list(productos_finales.keys())  # Ejemplo: ["merch_lapicero_clasico", "merch_blocks", ...]
+        all_cols = base_cols + prod_cols
         placeholders = ", ".join(["%s"] * len(all_cols))
-        insert_sql = f"""
-            INSERT INTO {conf_table} ({", ".join(all_cols)})
-            VALUES ({placeholders})
-        """
+        insert_sql = f"INSERT INTO {conf_table} ({', '.join(all_cols)}) VALUES ({placeholders})"
+        valores = [solicitud_id, confirmador, observaciones] + [productos_finales[col] for col in prod_cols]
+        cursor.execute(insert_sql, tuple(valores))
 
-        valores_insert = [
-            solicitud_id,     # para "solicitud_id"
-            confirmador,      # para "confirmador"
-            observaciones     # para "observaciones"
-        ]
-        # Añadir las cantidades de cada producto en el mismo orden que prod_cols
-        for c in prod_cols:
-            valores_insert.append(productos_finales[c])
-
-        cursor.execute(insert_sql, tuple(valores_insert))
-
-        # 4. Actualizar el status de la solicitud a "confirmed"
+        # 4. Actualizar el estado de la solicitud a 'confirmed'
         cursor.execute("UPDATE inventario_solicitudes SET status = 'confirmed' WHERE id = %s", (solicitud_id,))
 
-        # 5. (Opcional) Descontar stock en inventario_merch_{grupo} si lo deseas
-        #    Verifica también que la columna exista en la tabla de inventario, igual que aquí:
-        table_name = f"inventario_merch_{grupo}"
+        # 5. Verificar (y crear si no existen) las columnas en la tabla de inventario
         for col, qty in productos_finales.items():
             if not col.startswith("merch_"):
                 continue
-            # Revisa si la columna existe en inventario_merch_{grupo}
-            cursor.execute(query_check, (db_name, table_name, col))
-            (existe_inv_col,) = cursor.fetchone()
-            if existe_inv_col == 0:
-                # Crear la columna en la tabla de inventario
-                alt2 = f"ALTER TABLE {table_name} ADD COLUMN {col} INT DEFAULT 0;"
-                cursor.execute(alt2)
-                conn.commit()
+            alter_sql = f"ALTER TABLE {inv_table} ADD COLUMN IF NOT EXISTS {col} INT DEFAULT 0;"
+            cursor.execute(alter_sql)
+            conn.commit()
 
-        #    Ahora generamos un movimiento negativo (si qty>0):
-        desc_cols = []
-        desc_vals = []
-        for col, qty in productos_finales.items():
-            desc_cols.append(col)
-            desc_vals.append(-abs(qty))  # registra salida
-
+        # 6. Registrar el movimiento de stock (movimiento negativo según la cantidad confirmada)
+        desc_cols = list(productos_finales.keys())
+        desc_vals = [-abs(qty) for qty in productos_finales.values()]  # Se registra como salida (valor negativo)
         if desc_cols:
             ins_cols = ["responsable"] + desc_cols
             ph = ", ".join(["%s"] * len(ins_cols))
-            desc_sql = f"INSERT INTO {table_name} ({', '.join(ins_cols)}) VALUES ({ph})"
+            desc_sql = f"INSERT INTO {inv_table} ({', '.join(ins_cols)}) VALUES ({ph})"
             cursor.execute(desc_sql, tuple([f"Confirmación {solicitud_id}"] + desc_vals))
 
         conn.commit()
@@ -608,6 +569,7 @@ def confirmar_solicitud(solicitud_id):
     except Error as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
+
     finally:
         cursor.close()
         conn.close()
