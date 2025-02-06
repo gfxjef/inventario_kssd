@@ -394,29 +394,63 @@ def crear_solicitud():
 
     productos_str = json.dumps(productos)
 
-    query = """
-        INSERT INTO inventario_solicitudes
-        (solicitante, grupo, ruc, fecha_visita, cantidad_packs, productos, catalogos)
-        VALUES (%s, %s, %s, %s, %s, %s, %s);
-    """
-    values = (solicitante, grupo, ruc, fecha_visita, cantidad_packs, productos_str, catalogos)
-
+    # 1. Conectar a la base de datos
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
-
     cursor = conn.cursor()
+
     try:
-        cursor.execute(query, values)
+        # 2. Verificar si la tabla inventario_solicitudes existe:
+        db_name = os.environ.get('MYSQL_DATABASE')  # O tu variable de config
+        check_query = """
+            SELECT COUNT(*) 
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = %s
+              AND TABLE_NAME = 'inventario_solicitudes';
+        """
+        cursor.execute(check_query, (db_name,))
+        (existe_tabla,) = cursor.fetchone()
+
+        # 3. Si NO existe, la creamos
+        if existe_tabla == 0:
+            create_table_sql = """
+            CREATE TABLE IF NOT EXISTS inventario_solicitudes (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                solicitante VARCHAR(255),
+                grupo VARCHAR(50),
+                ruc VARCHAR(50),
+                fecha_visita DATE,
+                cantidad_packs INT DEFAULT 0,
+                productos TEXT,
+                catalogos TEXT,
+                status VARCHAR(50) DEFAULT 'pending'
+            );
+            """
+            cursor.execute(create_table_sql)
+            conn.commit()
+
+        # 4. Insertar la nueva solicitud
+        insert_sql = """
+            INSERT INTO inventario_solicitudes
+            (solicitante, grupo, ruc, fecha_visita, cantidad_packs, productos, catalogos)
+            VALUES (%s, %s, %s, %s, %s, %s, %s);
+        """
+        values = (solicitante, grupo, ruc, fecha_visita, cantidad_packs, productos_str, catalogos)
+        cursor.execute(insert_sql, values)
         conn.commit()
+
         nuevo_id = cursor.lastrowid
         return jsonify({"message": "Solicitud creada exitosamente", "id": nuevo_id}), 201
+
     except Error as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         cursor.close()
         conn.close()
+
 
 
 # GET: Listar solicitudes (permite filtrar por ?status=pending|... y/o ?id=123)
