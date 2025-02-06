@@ -359,9 +359,9 @@ def confirmar_solicitud():
       - solicitante, grupo, ruc, fecha_visita, cantidad_packs, catalogos
       - y para cada producto, claves que comienzan con "merch_" con las cantidades confirmadas.
     Se crea (si no existe) o actualiza la tabla inventario_solicitudes_conf para almacenar la confirmación.
-    Finalmente, se elimina la solicitud aprobada de la tabla inventario_solicitudes.
+    Luego, se elimina la solicitud de la tabla inventario_solicitudes.
     """
-    import json  # en caso de no estar importado
+    import json  # en caso de que no se haya importado
     data = request.get_json()
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
@@ -370,6 +370,7 @@ def confirmar_solicitud():
     if not solicitud_id:
         return jsonify({"error": "Falta el id de la solicitud."}), 400
 
+    # Campos básicos
     solicitante = data.get("solicitante")
     grupo = data.get("grupo")
     ruc = data.get("ruc")
@@ -380,16 +381,15 @@ def confirmar_solicitud():
     if not (solicitante and grupo and ruc and fecha_visita):
         return jsonify({"error": "Faltan campos requeridos: solicitante, grupo, ruc o fecha_visita."}), 400
 
-    # Extraer claves de producto (todas las que comienzan con "merch_")
+    # Extraer claves de producto (las que comienzan con "merch_")
     product_keys = [k for k in data.keys() if k.startswith("merch_")]
 
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
-
     cursor = conn.cursor()
     try:
-        # 1. Crear la tabla inventario_solicitudes_conf si no existe
+        # 1. Crear la tabla de confirmación si no existe.
         create_table_query = """
             CREATE TABLE IF NOT EXISTS inventario_solicitudes_conf (
                 id INT PRIMARY KEY,
@@ -405,7 +405,7 @@ def confirmar_solicitud():
         cursor.execute(create_table_query)
         conn.commit()
 
-        # 2. Verificar qué columnas de producto existen en inventario_solicitudes_conf
+        # 2. Verificar qué columnas de producto existen en la tabla de confirmación.
         db_name = os.environ.get('MYSQL_DATABASE')
         query_cols = """
             SELECT COLUMN_NAME 
@@ -415,14 +415,14 @@ def confirmar_solicitud():
         cursor.execute(query_cols, (db_name, "inventario_solicitudes_conf"))
         existing_cols = {row[0] for row in cursor.fetchall()}
 
-        # 3. Para cada clave de producto en el payload, si no existe, agregarla
+        # 3. Para cada clave de producto en el payload, si no existe en la tabla de confirmación, agregarla.
         for key in product_keys:
             if key not in existing_cols:
                 alter_query = f"ALTER TABLE inventario_solicitudes_conf ADD COLUMN {key} INT DEFAULT 0;"
                 cursor.execute(alter_query)
                 conn.commit()
 
-        # 4. Construir la lista de columnas y valores a insertar/actualizar.
+        # 4. Preparar los datos a insertar o actualizar.
         columns = ["id", "solicitante", "grupo", "ruc", "fecha_visita", "cantidad_packs", "catalogos"]
         values = [solicitud_id, solicitante, grupo, ruc, fecha_visita, cantidad_packs, catalogos]
         for key in product_keys:
@@ -439,19 +439,19 @@ def confirmar_solicitud():
         cursor.execute(insert_query, tuple(values))
         conn.commit()
 
-        # 5. Eliminar la solicitud de la tabla original inventario_solicitudes
+        # 5. Una vez confirmada la solicitud, eliminarla de la tabla original inventario_solicitudes.
         delete_query = "DELETE FROM inventario_solicitudes WHERE id = %s;"
         cursor.execute(delete_query, (solicitud_id,))
         conn.commit()
 
-        return jsonify({"message": "Solicitud confirmada y eliminada de pendientes correctamente", "id": solicitud_id}), 200
-
+        return jsonify({"message": "Solicitud confirmada y eliminada de pendientes", "id": solicitud_id}), 200
     except Exception as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         cursor.close()
         conn.close()
+
 
 
 #######################################
