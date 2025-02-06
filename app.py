@@ -510,9 +510,10 @@ def confirmar_solicitud(solicitud_id):
     if not conn:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
 
+    # Usaremos backticks en los nombres de columna y tabla para evitar problemas de sintaxis.
     cursor = conn.cursor(dictionary=True)
     try:
-        # 1. Verificar que la solicitud existe y su estado sea 'pending'
+        # 1. Verificar que la solicitud existe y que su estado es 'pending'
         cursor.execute("SELECT status, grupo FROM inventario_solicitudes WHERE id = %s", (solicitud_id,))
         solicitud = cursor.fetchone()
         if not solicitud:
@@ -541,16 +542,20 @@ def confirmar_solicitud(solicitud_id):
             cursor.execute(query_check, (db_name, conf_table, col))
             (exists_count,) = cursor.fetchone()
             if exists_count == 0:
-                alter_sql = f"ALTER TABLE {conf_table} ADD COLUMN {col} INT DEFAULT 0;"
+                # Usamos backticks alrededor del nombre de la columna
+                alter_sql = f"ALTER TABLE `{conf_table}` ADD COLUMN `{col}` INT DEFAULT 0;"
                 cursor.execute(alter_sql)
                 conn.commit()
 
         # 3. Insertar el registro de confirmación dinámicamente
         base_cols = ['solicitud_id', 'confirmador', 'observaciones']
-        prod_cols = list(productos_finales.keys())  # Ejemplo: ["merch_lapicero_clasico", "merch_blocks", ...]
+        prod_cols = list(productos_finales.keys())  # Ej: ["merch_lapicero_clasico", "merch_blocks", ...]
         all_cols = base_cols + prod_cols
+
+        # Usamos backticks en cada nombre de columna
+        cols_str = ", ".join([f"`{c}`" for c in all_cols])
         placeholders = ", ".join(["%s"] * len(all_cols))
-        insert_sql = f"INSERT INTO {conf_table} ({', '.join(all_cols)}) VALUES ({placeholders})"
+        insert_sql = f"INSERT INTO `{conf_table}` ({cols_str}) VALUES ({placeholders})"
         valores = [solicitud_id, confirmador, observaciones] + [productos_finales[col] for col in prod_cols]
         cursor.execute(insert_sql, tuple(valores))
 
@@ -564,17 +569,18 @@ def confirmar_solicitud(solicitud_id):
             cursor.execute(query_check, (db_name, inv_table, col))
             (exists_count,) = cursor.fetchone()
             if exists_count == 0:
-                alter_sql = f"ALTER TABLE {inv_table} ADD COLUMN {col} INT DEFAULT 0;"
+                alter_sql = f"ALTER TABLE `{inv_table}` ADD COLUMN `{col}` INT DEFAULT 0;"
                 cursor.execute(alter_sql)
                 conn.commit()
 
-        # 6. Registrar el movimiento en inventario (registramos una salida con valor negativo)
+        # 6. Registrar el movimiento en inventario (registramos una salida, es decir, un valor negativo)
         desc_cols = list(productos_finales.keys())
         desc_vals = [-abs(qty) for qty in productos_finales.values()]
         if desc_cols:
             ins_cols = ["responsable"] + desc_cols
+            cols_ins_str = ", ".join([f"`{c}`" for c in ins_cols])
             ph = ", ".join(["%s"] * len(ins_cols))
-            desc_sql = f"INSERT INTO {inv_table} ({', '.join(ins_cols)}) VALUES ({ph})"
+            desc_sql = f"INSERT INTO `{inv_table}` ({cols_ins_str}) VALUES ({ph})"
             cursor.execute(desc_sql, tuple([f"Confirmación {solicitud_id}"] + desc_vals))
 
         conn.commit()
@@ -587,6 +593,7 @@ def confirmar_solicitud(solicitud_id):
     finally:
         cursor.close()
         conn.close()
+
 
 
 
