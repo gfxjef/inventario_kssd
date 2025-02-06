@@ -95,6 +95,9 @@ table_queries["inventario_solicitudes_conf"] = f"CREATE TABLE IF NOT EXISTS inve
 
 
 def get_db_connection():
+    """
+    Retorna la conexión a la base de datos usando DB_CONFIG.
+    """
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         return conn
@@ -103,6 +106,9 @@ def get_db_connection():
         return None
 
 def create_tables():
+    """
+    Crea (o verifica) las tablas necesarias al iniciar la aplicación.
+    """
     conn = get_db_connection()
     if conn is None:
         print("No se pudo conectar a la base de datos")
@@ -215,7 +221,7 @@ def nuevo_producto():
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
 
     grupo = data.get('grupo')
-    nombre_producto = data.get('nombre_producto')  # Nombre original
+    nombre_producto = data.get('nombre_producto')  # Nombre original (solo informativo)
     columna = data.get('columna')  # Ej: "merch_lapicero_esco"
     cantidad = data.get('cantidad', 0)
 
@@ -232,9 +238,9 @@ def nuevo_producto():
     cursor = conn.cursor()
     try:
         # Verificar si la columna ya existe
-        db_name = os.environ.get('MYSQL_DATABASE')
+        db_name = DB_CONFIG['database']  # Tomamos el nombre de la DB desde DB_CONFIG
         query_check = """
-            SELECT COUNT(*) FROM information_schema.COLUMNS 
+            SELECT COUNT(*) FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s;
         """
         cursor.execute(query_check, (db_name, table_name, columna))
@@ -242,17 +248,18 @@ def nuevo_producto():
 
         if existe == 0:
             # Crear la columna si no existe
-            query_alter = f"ALTER TABLE {table_name} ADD COLUMN {columna} INT DEFAULT 0;"
-            cursor.execute(query_alter)
+            alter_sql = f"ALTER TABLE {table_name} ADD COLUMN `{columna}` INT DEFAULT 0;"
+            cursor.execute(alter_sql)
             conn.commit()
 
-        # Insertar un registro con la cantidad inicial
-        query_insert = f"INSERT INTO {table_name} ({columna}) VALUES (%s);"
-        cursor.execute(query_insert, (cantidad,))
+        # Insertar un registro con la cantidad inicial (o 0)
+        insert_sql = f"INSERT INTO {table_name} (`{columna}`) VALUES (%s);"
+        cursor.execute(insert_sql, (cantidad,))
         conn.commit()
-        nuevo_id = cursor.lastrowid
 
+        nuevo_id = cursor.lastrowid
         return jsonify({"message": "Nuevo producto agregado correctamente", "id": nuevo_id}), 201
+
     except Exception as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
@@ -265,7 +272,7 @@ def nuevo_producto():
 @app.route('/api/stock', methods=['GET'])
 def obtener_stock():
     import json
-    
+
     grupo = request.args.get('grupo')
     if grupo not in ['kossodo', 'kossomet']:
         return jsonify({"error": "Grupo inválido. Use 'kossodo' o 'kossomet'."}), 400
@@ -281,8 +288,8 @@ def obtener_stock():
         db_name = DB_CONFIG['database']
         # 1. Obtener columnas "merch_*" en la tabla de inventario
         query_cols = """
-            SELECT COLUMN_NAME 
-            FROM information_schema.COLUMNS 
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME LIKE 'merch\\_%'
         """
         cursor.execute(query_cols, (db_name, inventario_table))
@@ -297,9 +304,8 @@ def obtener_stock():
             total = result['total'] if result['total'] is not None else 0
             inventory_totals[col] = total
 
-        # 3. Calcular total solicitado por producto
+        # 3. Calcular total solicitado por producto (sumando todas las solicitudes del grupo)
         request_totals = {col: 0 for col in cols}
-        # Solo solicitudes de este grupo
         query_sol = "SELECT cantidad_packs, productos FROM inventario_solicitudes WHERE grupo = %s"
         cursor.execute(query_sol, (grupo,))
         sol_rows = cursor.fetchall()
@@ -331,21 +337,21 @@ def obtener_stock():
 
         # Verificar qué columnas existen en la tabla de stock
         query_cols_stock = """
-            SELECT COLUMN_NAME 
-            FROM information_schema.COLUMNS 
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME LIKE 'merch\\_%'
         """
         cursor.execute(query_cols_stock, (db_name, stock_table))
         stock_cols_existing = {row['COLUMN_NAME'] for row in cursor.fetchall()}
 
-        # Agregar columnas que falten
+        # Agregar columnas que falten en la tabla de stock
         for col in cols:
             if col not in stock_cols_existing:
-                alter_query = f"ALTER TABLE {stock_table} ADD COLUMN {col} INT DEFAULT 0;"
+                alter_query = f"ALTER TABLE {stock_table} ADD COLUMN `{col}` INT DEFAULT 0;"
                 cursor.execute(alter_query)
                 conn.commit()
 
-        # Actualizar (o insertar) la fila con id=1 en la tabla de stock
+        # 6. Actualizar (o insertar) la fila con id=1 en la tabla de stock
         columns_list = ', '.join([f"`{col}`" for col in cols])
         placeholders = ', '.join(['%s'] * len(cols))
         values = [stock[col] for col in cols]
@@ -358,7 +364,7 @@ def obtener_stock():
         cursor.execute(insert_query, values)
         conn.commit()
 
-        # 6. Retornar la fila actualizada
+        # 7. Retornar la fila actualizada
         cursor.execute(f"SELECT * FROM {stock_table} WHERE id = 1;")
         stock_row = cursor.fetchone()
         return jsonify(stock_row), 200
@@ -369,6 +375,7 @@ def obtener_stock():
     finally:
         cursor.close()
         conn.close()
+
 
 #######################################
 # Endpoints para Solicitudes
@@ -437,8 +444,6 @@ def crear_solicitud():
     finally:
         cursor.close()
         conn.close()
-
-
 
 
 # GET: Listar solicitudes (permite filtrar por ?status=pending|... y/o ?id=123)
@@ -514,21 +519,21 @@ def confirmar_solicitud(solicitud_id):
         inv_table = f"inventario_merch_{grupo}"
 
         # 2. Asegurar que todas las columnas existan en ambas tablas
+        # (Solo para aquellas que empiecen con merch_)
         for col_name in productos_finales.keys():
-            # Solo creamos columnas que empiecen con merch_ (según tu lógica)
             if col_name.startswith('merch_'):
                 ensure_column_exists(cursor, conf_table, col_name)
                 ensure_column_exists(cursor, inv_table, col_name)
-        
-        # Hacemos commit tras crear (si es que se crearon)
+
+        # Hacemos commit tras la creación de columnas (si es que se crearon)
         conn.commit()
 
         # 3. Insertar el registro de confirmación
         base_cols = ['solicitud_id', 'confirmador', 'observaciones']
-        prod_cols = list(productos_finales.keys())  # 'merch_xxxx'
+        prod_cols = list(productos_finales.keys())  # p. ej. ['merch_lapicero_clasico', ...]
         all_cols = base_cols + prod_cols
 
-        cols_str = ", ".join(all_cols)  # solicitud_id, confirmador, observaciones, merch_xxx, ...
+        cols_str = ", ".join(all_cols)  # "solicitud_id, confirmador, observaciones, merch_xxx, ..."
         placeholders = ", ".join(["%s"] * len(all_cols))
         insert_sql = f"INSERT INTO {conf_table} ({cols_str}) VALUES ({placeholders})"
 
@@ -546,6 +551,7 @@ def confirmar_solicitud(solicitud_id):
         # 5. Registrar la salida en inventario (insertamos valores negativos)
         if productos_finales:
             inv_cols = ['responsable'] + list(productos_finales.keys())
+            # Por ejemplo, inv_cols = ['responsable', 'merch_lapicero_clasico', 'merch_blocks', ...]
             inv_vals = [f"Confirmación {solicitud_id}"] + [
                 -abs(qty) for qty in productos_finales.values()
             ]
@@ -567,17 +573,14 @@ def confirmar_solicitud(solicitud_id):
         conn.close()
 
 
-
-
-
-
 def ensure_column_exists(cursor, table_name, column_name):
     """
-    Verifica si una columna existe en la tabla y la crea si no existe.
+    Verifica si una columna existe en la tabla dada (table_name)
+    y la crea si no existe. Apunta a la misma base de datos
+    definida en DB_CONFIG.
     """
     try:
-        # ¡Usar DB_CONFIG['database'] en lugar de os.environ.get!
-        db_name = DB_CONFIG['database']
+        db_name = DB_CONFIG['database']  # Importante: usar la misma DB
         query_check = """
             SELECT COUNT(*) FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s;
@@ -595,8 +598,6 @@ def ensure_column_exists(cursor, table_name, column_name):
     except Error as e:
         print(f"Error al verificar/crear columna {column_name}: {str(e)}")
         raise
-
-
 
 #######################################
 # Inicio de la aplicación
