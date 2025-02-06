@@ -8,14 +8,14 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Configuración de CORS: permite tanto HTTP como HTTPS para los orígenes requeridos
+# Configuración de CORS (ajusta orígenes según tu necesidad)
 CORS(app, resources={r"/*": {"origins": [
     "http://kossodo.estilovisual.com",
     "https://kossodo.estilovisual.com",
     "https://atusaludlicoreria.com"
 ]}})
 
-# Configuración de la base de datos (se esperan variables de entorno)
+# Configuración de la base de datos
 DB_CONFIG = {
     'user': os.environ.get('MYSQL_USER'),
     'password': os.environ.get('MYSQL_PASSWORD'),
@@ -46,20 +46,17 @@ merch_columns = [
 ]
 columns_merch_str = ", ".join(merch_columns)
 
-# Nombres de las tablas de inventario de productos
+# Tablas de inventario para Kossodo y Kossomet
 TABLES_MERCH = [
     "inventario_merch_kossodo",
     "inventario_merch_kossomet"
 ]
 
-# Query para crear las tablas de inventario de productos
 table_queries = {}
 for table in TABLES_MERCH:
     table_queries[table] = f"CREATE TABLE IF NOT EXISTS {table} ({columns_merch_str});"
 
-# Tabla para las solicitudes de inventario
-# Se almacenarán los productos solicitados en formato JSON en el campo 'productos'
-# Se agrega 'status' con valor por defecto 'pending'
+# Tabla de solicitudes (con status='pending' por defecto)
 solicitudes_columns = [
     "id INT AUTO_INCREMENT PRIMARY KEY",
     "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP",
@@ -72,22 +69,29 @@ solicitudes_columns = [
     "catalogos TEXT",
     "status VARCHAR(50) DEFAULT 'pending'"
 ]
-table_queries["inventario_solicitudes"] = f"CREATE TABLE IF NOT EXISTS inventario_solicitudes ({', '.join(solicitudes_columns)});"
+table_queries["inventario_solicitudes"] = (
+    f"CREATE TABLE IF NOT EXISTS inventario_solicitudes ({', '.join(solicitudes_columns)});"
+)
 
-# Tabla para la confirmación de solicitudes
-# Referencia con FOREIGN KEY a inventario_solicitudes(id)
-confirmaciones_table = """
-CREATE TABLE IF NOT EXISTS inventario_solicitudes_conf (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    solicitud_id INT NOT NULL,
-    confirmador VARCHAR(255) NOT NULL,
-    productos TEXT,
-    observaciones TEXT,
-    FOREIGN KEY (solicitud_id) REFERENCES inventario_solicitudes(id)
-);
-"""
-table_queries["inventario_solicitudes_conf"] = confirmaciones_table
+# Tabla de confirmaciones de solicitudes
+conf_columns = [
+    "id INT AUTO_INCREMENT PRIMARY KEY",
+    "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP",
+    "solicitud_id INT NOT NULL",
+    "confirmador VARCHAR(255) NOT NULL",
+    "observaciones TEXT",
+    "merch_lapiceros_normales INT DEFAULT 0",
+    "merch_lapicero_ejecutivos INT DEFAULT 0",
+    "merch_blocks INT DEFAULT 0",
+    "merch_tacos INT DEFAULT 0",
+    "merch_gel_botella INT DEFAULT 0",
+    "merch_bolas_antiestres INT DEFAULT 0",
+    "merch_padmouse INT DEFAULT 0",
+    "merch_bolsa INT DEFAULT 0",
+    "merch_lapiceros_esco INT DEFAULT 0",
+    "FOREIGN KEY (solicitud_id) REFERENCES inventario_solicitudes(id)"
+]
+table_queries["inventario_solicitudes_conf"] = f"CREATE TABLE IF NOT EXISTS inventario_solicitudes_conf ({', '.join(conf_columns)});"
 
 
 def get_db_connection():
@@ -97,7 +101,6 @@ def get_db_connection():
     except Error as e:
         print(f"Error de conexión: {e}")
         return None
-
 
 def create_tables():
     conn = get_db_connection()
@@ -115,7 +118,6 @@ def create_tables():
     cursor.close()
     conn.close()
 
-
 # Ejecutar la creación de tablas al iniciar la aplicación
 create_tables()
 
@@ -124,7 +126,6 @@ create_tables()
 #######################################
 
 # GET: Obtener registros del inventario
-# Ejemplo: /api/inventario?tabla=kossodo o /api/inventario?tabla=kossomet
 @app.route('/api/inventario', methods=['GET'])
 def obtener_inventario():
     tabla_param = request.args.get('tabla')
@@ -149,7 +150,6 @@ def obtener_inventario():
 
 
 # POST: Agregar un nuevo registro al inventario
-# Ejemplo: /api/inventario?tabla=kossodo o /api/inventario?tabla=kossomet
 @app.route('/api/inventario', methods=['POST'])
 def agregar_inventario():
     tabla_param = request.args.get('tabla')
@@ -161,7 +161,7 @@ def agregar_inventario():
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
 
-    # Se esperan los siguientes campos
+    # Campos esperados en data
     campos = [
         "responsable",
         "merch_lapiceros_normales",
@@ -207,7 +207,7 @@ def agregar_inventario():
         conn.close()
 
 
-# POST: Agregar un nuevo tipo de producto (columna) a la tabla de inventario + insertar un registro
+# POST: Agregar un nuevo tipo de producto (nueva columna) en la tabla + insertar un registro
 @app.route('/api/nuevo_producto', methods=['POST'])
 def nuevo_producto():
     data = request.get_json()
@@ -215,8 +215,8 @@ def nuevo_producto():
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
 
     grupo = data.get('grupo')
-    nombre_producto = data.get('nombre_producto')  # Nombre original para referencia
-    columna = data.get('columna')  # Ej. "merch_lapicero_esco"
+    nombre_producto = data.get('nombre_producto')  # Nombre original
+    columna = data.get('columna')  # Ej: "merch_lapicero_esco"
     cantidad = data.get('cantidad', 0)
 
     if grupo not in ['kossodo', 'kossomet']:
@@ -232,11 +232,11 @@ def nuevo_producto():
     cursor = conn.cursor()
     try:
         # Verificar si la columna ya existe
+        db_name = os.environ.get('MYSQL_DATABASE')
         query_check = """
             SELECT COUNT(*) FROM information_schema.COLUMNS 
             WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s;
         """
-        db_name = os.environ.get('MYSQL_DATABASE')
         cursor.execute(query_check, (db_name, table_name, columna))
         (existe,) = cursor.fetchone()
 
@@ -261,7 +261,7 @@ def nuevo_producto():
         conn.close()
 
 
-# GET: Obtener el stock calculado (inventario - solicitudes) y actualizar una tabla de stock
+# GET: Obtener el stock calculado y actualizar inventario_stock_{grupo}
 @app.route('/api/stock', methods=['GET'])
 def obtener_stock():
     import json
@@ -299,7 +299,7 @@ def obtener_stock():
 
         # 3. Calcular total solicitado por producto
         request_totals = {col: 0 for col in cols}
-        # Solo solicitudes del grupo actual
+        # Solo solicitudes de este grupo
         query_sol = "SELECT cantidad_packs, productos FROM inventario_solicitudes WHERE grupo = %s"
         cursor.execute(query_sol, (grupo,))
         sol_rows = cursor.fetchall()
@@ -310,7 +310,6 @@ def obtener_stock():
             except Exception:
                 productos_list = []
 
-            # productos_list es un array de strings (ej: ["merch_lapiceros_normales", "merch_tacos"])
             for prod in productos_list:
                 if prod in request_totals:
                     request_totals[prod] += cantidad
@@ -359,7 +358,7 @@ def obtener_stock():
         cursor.execute(insert_query, values)
         conn.commit()
 
-        # 6. Obtener la fila actualizada y retornarla
+        # 6. Retornar la fila actualizada
         cursor.execute(f"SELECT * FROM {stock_table} WHERE id = 1;")
         stock_row = cursor.fetchone()
         return jsonify(stock_row), 200
@@ -370,7 +369,6 @@ def obtener_stock():
     finally:
         cursor.close()
         conn.close()
-
 
 #######################################
 # Endpoints para Solicitudes
@@ -388,14 +386,12 @@ def crear_solicitud():
     ruc = data.get('ruc')
     fecha_visita = data.get('fecha_visita')
     cantidad_packs = data.get('cantidad_packs', 0)
-    productos = data.get('productos', [])  # lista de strings
+    productos = data.get('productos', [])
     catalogos = data.get('catalogos', "")
 
-    # Validación de campos requeridos
     if not solicitante or not grupo or not ruc or not fecha_visita:
         return jsonify({"error": "Faltan campos requeridos: solicitante, grupo, ruc, fecha_visita."}), 400
 
-    # Convertir lista de productos a JSON
     productos_str = json.dumps(productos)
 
     query = """
@@ -423,8 +419,7 @@ def crear_solicitud():
         conn.close()
 
 
-# GET: Listar solicitudes. Permite filtrar por ?status=pending|confirmed|...
-# También si deseas filtrar por id (ej: ?id=123) para obtener una en particular
+# GET: Listar solicitudes (permite filtrar por ?status=pending|... y/o ?id=123)
 @app.route('/api/solicitudes', methods=['GET'])
 def obtener_solicitudes():
     conn = get_db_connection()
@@ -461,22 +456,28 @@ def obtener_solicitudes():
         conn.close()
 
 
-# PUT: Confirmar una solicitud
-# Recibe:
-# {
-#   "confirmador": "Nombre",
-#   "productos": { "merch_lapiceros_normales": 5, "merch_tacos": 3 },
-#   "observaciones": "Algún comentario"
-# }
+# PUT: Confirmar una solicitud (almacenar en inventario_solicitudes_conf + restar stock)
 @app.route('/api/solicitudes/<int:solicitud_id>/confirm', methods=['PUT'])
 def confirmar_solicitud(solicitud_id):
+    """
+    Espera un JSON como:
+    {
+      "confirmador": "Nombre",
+      "observaciones": "Texto",
+      "productos": {
+         "merch_lapiceros_normales": 5,
+         "merch_tacos": 3,
+         ...
+      }
+    }
+    """
     data = request.get_json()
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
 
     confirmador = data.get('confirmador')
+    observaciones = data.get('observaciones', "")
     productos_finales = data.get('productos', {})
-    observaciones = data.get('observaciones', '')
 
     if not confirmador:
         return jsonify({"error": "El campo 'confirmador' es requerido."}), 400
@@ -485,7 +486,7 @@ def confirmar_solicitud(solicitud_id):
     if not conn:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
 
-    cursor = conn.cursor()
+    cursor = conn.cursor(dictionary=True)
     try:
         # 1. Verificar la solicitud
         cursor.execute("SELECT status, grupo FROM inventario_solicitudes WHERE id = %s", (solicitud_id,))
@@ -493,44 +494,59 @@ def confirmar_solicitud(solicitud_id):
         if not row:
             return jsonify({"error": "La solicitud no existe."}), 404
 
-        status_actual = row[0]
-        grupo = row[1]
+        if row['status'] != 'pending':
+            return jsonify({"error": f"La solicitud no está pendiente (status actual: {row['status']})."}), 400
 
-        if status_actual != 'pending':
-            return jsonify({"error": f"La solicitud no está pendiente (status actual: {status_actual})."}), 400
+        grupo = row['grupo']
 
-        # 2. Insertar registro en inventario_solicitudes_conf
-        productos_str = json.dumps(productos_finales)
-        insert_conf = """
-            INSERT INTO inventario_solicitudes_conf (solicitud_id, confirmador, productos, observaciones)
-            VALUES (%s, %s, %s, %s)
+        # 2. Insertar en inventario_solicitudes_conf
+        conf_campos = [
+            'merch_lapiceros_normales',
+            'merch_lapicero_ejecutivos',
+            'merch_blocks',
+            'merch_tacos',
+            'merch_gel_botella',
+            'merch_bolas_antiestres',
+            'merch_padmouse',
+            'merch_bolsa',
+            'merch_lapiceros_esco'
+        ]
+        columnas_insert = ['solicitud_id', 'confirmador', 'observaciones'] + conf_campos
+        placeholders = ", ".join(["%s"] * len(columnas_insert))
+
+        valores_insert = [
+            solicitud_id,
+            confirmador,
+            observaciones
+        ]
+        for c in conf_campos:
+            valores_insert.append(productos_finales.get(c, 0))
+
+        insert_query = f"""
+            INSERT INTO inventario_solicitudes_conf
+            ({", ".join(columnas_insert)})
+            VALUES ({placeholders});
         """
-        cursor.execute(insert_conf, (solicitud_id, confirmador, productos_str, observaciones))
+        cursor.execute(insert_query, valores_insert)
 
-        # 3. Actualizar status de la solicitud
-        update_sol = "UPDATE inventario_solicitudes SET status = 'confirmed' WHERE id = %s"
-        cursor.execute(update_sol, (solicitud_id,))
+        # 3. Actualizar status a 'confirmed'
+        cursor.execute("UPDATE inventario_solicitudes SET status = 'confirmed' WHERE id = %s", (solicitud_id,))
 
-        # 4. (Opcional) Descontar stock de la tabla respectiva (kossodo o kossomet),
-        #    si así lo deseas. Aquí una idea básica:
-        #
-        # table_name = f"inventario_merch_{grupo}"
-        # columns = []
-        # values = []
-        # for col, qty in productos_finales.items():
-        #     columns.append(col)
-        #     # Cantidad negativa para "salida"
-        #     values.append(-abs(qty))
-        #
-        # if columns:
-        #     placeholders = ", ".join(["%s"] * len(values))
-        #     columns_str = ", ".join(columns)
-        #     query_descontar = f"""
-        #         INSERT INTO {table_name} (responsable, {columns_str})
-        #         VALUES (%s, {placeholders})
-        #     """
-        #     # Por ejemplo, "Sistema Confirmación" como responsable
-        #     cursor.execute(query_descontar, tuple(["Sistema Confirmación"] + values))
+        # 4. Descontar stock en inventario_merch_{grupo} (INSERT con valores negativos)
+        table_name = f"inventario_merch_{grupo}"
+        desc_cols = []
+        desc_vals = []
+        for c in conf_campos:
+            qty = productos_finales.get(c, 0)
+            if qty != 0:
+                desc_cols.append(c)
+                desc_vals.append(-abs(qty))
+
+        if desc_cols:
+            ins_cols = ["responsable"] + desc_cols
+            ins_placeholders = ", ".join(["%s"] * len(ins_cols))
+            desc_query = f"INSERT INTO {table_name} ({', '.join(ins_cols)}) VALUES ({ins_placeholders})"
+            cursor.execute(desc_query, tuple([f"Confirmación {solicitud_id}"] + desc_vals))
 
         conn.commit()
         return jsonify({"message": "Solicitud confirmada exitosamente"}), 200
@@ -545,7 +561,5 @@ def confirmar_solicitud(solicitud_id):
 #######################################
 # Inicio de la aplicación
 #######################################
-
 if __name__ == '__main__':
-    # Ajusta host y puerto según tus necesidades
     app.run(debug=True)
