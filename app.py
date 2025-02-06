@@ -459,18 +459,6 @@ def obtener_solicitudes():
 # PUT: Confirmar una solicitud (almacenar en inventario_solicitudes_conf + restar stock)
 @app.route('/api/solicitudes/<int:solicitud_id>/confirm', methods=['PUT'])
 def confirmar_solicitud(solicitud_id):
-    """
-    Espera un JSON como:
-    {
-      "confirmador": "Nombre",
-      "observaciones": "Texto",
-      "productos": {
-         "merch_lapiceros_normales": 5,
-         "merch_tacos": 3,
-         ...
-      }
-    }
-    """
     data = request.get_json()
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
@@ -488,74 +476,108 @@ def confirmar_solicitud(solicitud_id):
 
     cursor = conn.cursor(dictionary=True)
     try:
-        # 1. Verificar la solicitud
+        # 1. Verificar solicitud
         cursor.execute("SELECT status, grupo FROM inventario_solicitudes WHERE id = %s", (solicitud_id,))
         row = cursor.fetchone()
         if not row:
             return jsonify({"error": "La solicitud no existe."}), 404
 
         if row['status'] != 'pending':
-            return jsonify({"error": f"La solicitud no está pendiente (status actual: {row['status']})."}), 400
+            return jsonify({"error": f"La solicitud no está pendiente (status: {row['status']})."}), 400
 
         grupo = row['grupo']
 
-        # 2. Insertar en inventario_solicitudes_conf
-        conf_campos = [
-            'merch_lapiceros_normales',
-            'merch_lapicero_ejecutivos',
-            'merch_blocks',
-            'merch_tacos',
-            'merch_gel_botella',
-            'merch_bolas_antiestres',
-            'merch_padmouse',
-            'merch_bolsa',
-            'merch_lapiceros_esco'
-        ]
-        columnas_insert = ['solicitud_id', 'confirmador', 'observaciones'] + conf_campos
+        # 2. Asegurar que las columnas existen en inventario_solicitudes_conf
+        conf_table = "inventario_solicitudes_conf"
+        db_name = DB_CONFIG['database']  # tu variable con el nombre de BD
+
+        for col in productos_finales.keys():
+            if not col.startswith("merch_"):
+                # opcional: asegurarte de que sea una col "merch_..."
+                continue
+
+            # Verificar si existe en inventario_solicitudes_conf
+            query_check = """
+                SELECT COUNT(*) 
+                  FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = %s
+                   AND TABLE_NAME = %s
+                   AND COLUMN_NAME = %s
+            """
+            cursor.execute(query_check, (db_name, conf_table, col))
+            (existe_col,) = cursor.fetchone()
+            if existe_col == 0:
+                # Crear columna en inventario_solicitudes_conf
+                alter_query = f"ALTER TABLE {conf_table} ADD COLUMN {col} INT DEFAULT 0;"
+                cursor.execute(alter_query)
+                conn.commit()
+
+        # 3. Insertar registro en inventario_solicitudes_conf
+        #    Primero, construimos la lista de columnas existentes:
+        conf_campos_base = ['solicitud_id', 'confirmador', 'observaciones']
+        # Agregamos las claves (columnas) que tenemos en productos_finales
+        prod_cols = list(productos_finales.keys())
+        columnas_insert = conf_campos_base + prod_cols
+
         placeholders = ", ".join(["%s"] * len(columnas_insert))
+        insert_sql = f"""
+            INSERT INTO {conf_table} ({", ".join(columnas_insert)})
+            VALUES ({placeholders})
+        """
 
         valores_insert = [
             solicitud_id,
             confirmador,
             observaciones
         ]
-        for c in conf_campos:
-            valores_insert.append(productos_finales.get(c, 0))
+        # Añadir los valores de los productos en el mismo orden
+        for c in prod_cols:
+            valores_insert.append(productos_finales[c])
 
-        insert_query = f"""
-            INSERT INTO inventario_solicitudes_conf
-            ({", ".join(columnas_insert)})
-            VALUES ({placeholders});
-        """
-        cursor.execute(insert_query, valores_insert)
+        cursor.execute(insert_sql, tuple(valores_insert))
 
-        # 3. Actualizar status a 'confirmed'
+        # 4. Actualizar status de la solicitud
         cursor.execute("UPDATE inventario_solicitudes SET status = 'confirmed' WHERE id = %s", (solicitud_id,))
 
-        # 4. Descontar stock en inventario_merch_{grupo} (INSERT con valores negativos)
+        # 5. (Opcional) Descontar stock de inventario_merch_{grupo}
         table_name = f"inventario_merch_{grupo}"
+        for col, qty in productos_finales.items():
+            if not col.startswith("merch_"):
+                continue
+
+            # Verificar si existe en la tabla de inventario
+            cursor.execute(query_check, (db_name, table_name, col))
+            (existe_inv_col,) = cursor.fetchone()
+            if existe_inv_col == 0:
+                # Crear columna en la tabla de inventario
+                alter_query = f"ALTER TABLE {table_name} ADD COLUMN {col} INT DEFAULT 0;"
+                cursor.execute(alter_query)
+                conn.commit()
+
+        # Ahora armamos un INSERT con valores negativos
+        # (así registramos un "movimiento" de salida)
         desc_cols = []
         desc_vals = []
-        for c in conf_campos:
-            qty = productos_finales.get(c, 0)
-            if qty != 0:
-                desc_cols.append(c)
-                desc_vals.append(-abs(qty))
+        for col, qty in productos_finales.items():
+            desc_cols.append(col)
+            desc_vals.append(-abs(qty))
 
         if desc_cols:
             ins_cols = ["responsable"] + desc_cols
-            ins_placeholders = ", ".join(["%s"] * len(ins_cols))
-            desc_query = f"INSERT INTO {table_name} ({', '.join(ins_cols)}) VALUES ({ins_placeholders})"
-            cursor.execute(desc_query, tuple([f"Confirmación {solicitud_id}"] + desc_vals))
+            ph = ", ".join(["%s"] * len(ins_cols))
+            desc_sql = f"INSERT INTO {table_name} ({', '.join(ins_cols)}) VALUES ({ph})"
+            cursor.execute(desc_sql, tuple([f"Confirmación {solicitud_id}"] + desc_vals))
 
         conn.commit()
         return jsonify({"message": "Solicitud confirmada exitosamente"}), 200
+
     except Error as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         cursor.close()
         conn.close()
+
 
 
 #######################################
