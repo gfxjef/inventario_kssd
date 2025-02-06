@@ -394,27 +394,14 @@ def crear_solicitud():
 
     productos_str = json.dumps(productos)
 
-    # 1. Conectar a la base de datos
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
     cursor = conn.cursor()
 
     try:
-        # 2. Verificar si la tabla inventario_solicitudes existe:
-        db_name = os.environ.get('MYSQL_DATABASE')  # O tu variable de config
-        check_query = """
-            SELECT COUNT(*) 
-            FROM information_schema.TABLES
-            WHERE TABLE_SCHEMA = %s
-              AND TABLE_NAME = 'inventario_solicitudes';
-        """
-        cursor.execute(check_query, (db_name,))
-        (existe_tabla,) = cursor.fetchone()
-
-        # 3. Si NO existe, la creamos
-        if existe_tabla == 0:
-            create_table_sql = """
+        # Ejecuta siempre el CREATE TABLE IF NOT EXISTS para inventario_solicitudes
+        create_table_sql = """
             CREATE TABLE IF NOT EXISTS inventario_solicitudes (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -427,11 +414,11 @@ def crear_solicitud():
                 catalogos TEXT,
                 status VARCHAR(50) DEFAULT 'pending'
             );
-            """
-            cursor.execute(create_table_sql)
-            conn.commit()
+        """
+        cursor.execute(create_table_sql)
+        conn.commit()
 
-        # 4. Insertar la nueva solicitud
+        # Inserta la nueva solicitud
         insert_sql = """
             INSERT INTO inventario_solicitudes
             (solicitante, grupo, ruc, fecha_visita, cantidad_packs, productos, catalogos)
@@ -450,6 +437,7 @@ def crear_solicitud():
     finally:
         cursor.close()
         conn.close()
+
 
 
 
