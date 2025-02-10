@@ -281,7 +281,7 @@ def obtener_stock():
     cursor = conn.cursor(dictionary=True)
     try:
         db_name = DB_CONFIG['database']
-        # 1. Obtener las columnas que comienzan con "merch_" de la tabla de inventario
+        # 1. Obtener columnas "merch_*" en la tabla de inventario
         query_cols = """
             SELECT COLUMN_NAME
             FROM information_schema.COLUMNS
@@ -290,7 +290,7 @@ def obtener_stock():
         cursor.execute(query_cols, (db_name, inventario_table))
         cols = [row['COLUMN_NAME'] for row in cursor.fetchall()]
 
-        # 2. Sumar totales del inventario por cada producto
+        # 2. Sumar totales de inventario por producto
         inventory_totals = {}
         for col in cols:
             query_sum = f"SELECT SUM(`{col}`) AS total FROM {inventario_table}"
@@ -299,16 +299,16 @@ def obtener_stock():
             total = result['total'] if result['total'] is not None else 0
             inventory_totals[col] = total
 
-        # 3. Calcular el total consumido por producto según las confirmaciones (inventario_solicitudes_conf)
-        # Se inicializa un diccionario con cada columna existente en el inventario
+        # 3. Calcular total confirmado por producto (sumando todas las confirmaciones del grupo)
+        #    Se obtiene la información de la tabla 'inventario_solicitudes_conf' y se parsea el JSON de la columna 'productos'
         request_totals = {col: 0 for col in cols}
         query_conf = "SELECT productos FROM inventario_solicitudes_conf WHERE grupo = %s"
         cursor.execute(query_conf, (grupo,))
         conf_rows = cursor.fetchall()
         for row in conf_rows:
             try:
-                # Se espera que "productos" sea un JSON con un diccionario, ej:
-                # {"merch_lapicero_kossodo": 1, "merch_bolsas": 1}
+                # Se espera que 'productos' sea un JSON con el formato:
+                # {"merch_lapicero_kossodo": 1, "merch_bolsas": 1, ...}
                 productos_dict = json.loads(row['productos']) if row['productos'] else {}
             except Exception:
                 productos_dict = {}
@@ -316,12 +316,12 @@ def obtener_stock():
                 if prod in request_totals:
                     request_totals[prod] += qty
 
-        # 4. Calcular el stock actual: inventario - consumos confirmados
+        # 4. Calcular el stock final por producto: inventario - confirmaciones
         stock = {}
         for col in cols:
             stock[col] = inventory_totals.get(col, 0) - request_totals.get(col, 0)
 
-        # 5. Crear la tabla de stock si no existe (con al menos una columna id y timestamp)
+        # 5. Crear la tabla de stock si no existe
         create_stock_query = f"""
             CREATE TABLE IF NOT EXISTS {stock_table} (
                 id INT PRIMARY KEY,
@@ -331,7 +331,7 @@ def obtener_stock():
         cursor.execute(create_stock_query)
         conn.commit()
 
-        # 6. Verificar qué columnas existen en la tabla de stock
+        # Verificar qué columnas existen en la tabla de stock
         query_cols_stock = """
             SELECT COLUMN_NAME
             FROM information_schema.COLUMNS
@@ -340,14 +340,14 @@ def obtener_stock():
         cursor.execute(query_cols_stock, (db_name, stock_table))
         stock_cols_existing = {row['COLUMN_NAME'] for row in cursor.fetchall()}
 
-        # Agregar columnas que no existan en la tabla de stock
+        # Agregar columnas que falten en la tabla de stock
         for col in cols:
             if col not in stock_cols_existing:
                 alter_query = f"ALTER TABLE {stock_table} ADD COLUMN `{col}` INT DEFAULT 0;"
                 cursor.execute(alter_query)
                 conn.commit()
 
-        # 7. Insertar o actualizar la fila (id=1) con los valores del stock
+        # 6. Actualizar (o insertar) la fila con id=1 en la tabla de stock
         columns_list = ', '.join([f"`{col}`" for col in cols])
         placeholders = ', '.join(['%s'] * len(cols))
         values = [stock[col] for col in cols]
@@ -360,7 +360,7 @@ def obtener_stock():
         cursor.execute(insert_query, values)
         conn.commit()
 
-        # 8. Retornar la fila actualizada del stock
+        # 7. Retornar la fila actualizada de la tabla de stock
         cursor.execute(f"SELECT * FROM {stock_table} WHERE id = 1;")
         stock_row = cursor.fetchone()
         return jsonify(stock_row), 200
@@ -371,6 +371,7 @@ def obtener_stock():
     finally:
         cursor.close()
         conn.close()
+
 
 
 
