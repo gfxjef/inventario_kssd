@@ -490,7 +490,7 @@ def confirmar_solicitud(solicitud_id):
 
     confirmador = data.get('confirmador')
     observaciones = data.get('observaciones', "")
-    productos_finales = data.get('productos', {})  # Se espera un diccionario, ej: {"merch_lapicero_clasico": 5, "merch_padmouse": 5}
+    productos_finales = data.get('productos', {})  # Ejemplo: {"merch_lapicero_clasico": 5, "merch_padmouse": 5}
 
     if not confirmador:
         return jsonify({"error": "El campo 'confirmador' es requerido."}), 400
@@ -514,7 +514,6 @@ def confirmar_solicitud(solicitud_id):
 
         grupo = solicitud['grupo']
         conf_table = "inventario_solicitudes_conf"
-        inv_table = f"inventario_merch_{grupo}"
 
         # 2. Insertar el registro de confirmación con los datos en formato JSON, incluyendo el campo grupo
         import json
@@ -531,18 +530,8 @@ def confirmar_solicitud(solicitud_id):
             (solicitud_id,)
         )
 
-        # 4. Registrar la salida en inventario (insertamos valores negativos)
-        if productos_finales:
-            inv_cols = ['responsable'] + list(productos_finales.keys())
-            # Por ejemplo, inv_cols = ['responsable', 'merch_lapicero_clasico', 'merch_padmouse', ...]
-            inv_vals = [f"Confirmación {solicitud_id}"] + [
-                -abs(qty) for qty in productos_finales.values()
-            ]
-
-            inv_cols_str = ", ".join(inv_cols)
-            inv_placeholders = ", ".join(["%s"] * len(inv_vals))
-            inv_sql = f"INSERT INTO {inv_table} ({inv_cols_str}) VALUES ({inv_placeholders})"
-            cursor.execute(inv_sql, tuple(inv_vals))
+        # NOTA: Se ha eliminado la inserción en la tabla de inventario (los registros negativos)
+        # para que luego se realice la resta en el cálculo de stock.
 
         conn.commit()
         return jsonify({"message": "Solicitud confirmada exitosamente"}), 200
