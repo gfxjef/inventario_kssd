@@ -513,14 +513,14 @@ def confirmar_solicitud(solicitud_id):
         conf_table = "inventario_solicitudes_conf"
         inv_table = f"inventario_merch_{grupo}"
 
-        # 2. Insertar el registro de confirmación con los datos en formato JSON
+        # 2. Insertar el registro de confirmación con los datos en formato JSON, incluyendo el campo grupo
         import json
         productos_json = json.dumps(productos_finales) if productos_finales else None
         insert_sql = f"""
-            INSERT INTO {conf_table} (solicitud_id, confirmador, observaciones, productos)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO {conf_table} (solicitud_id, confirmador, observaciones, productos, grupo)
+            VALUES (%s, %s, %s, %s, %s)
         """
-        cursor.execute(insert_sql, (solicitud_id, confirmador, observaciones, productos_json))
+        cursor.execute(insert_sql, (solicitud_id, confirmador, observaciones, productos_json, grupo))
 
         # 3. Actualizar el estado de la solicitud a 'confirmed'
         cursor.execute(
@@ -551,6 +551,7 @@ def confirmar_solicitud(solicitud_id):
     finally:
         cursor.close()
         conn.close()
+
 
 
 
