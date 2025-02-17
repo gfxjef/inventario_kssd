@@ -162,32 +162,20 @@ def agregar_inventario():
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
 
-    # Campos esperados en data
-    campos = [
-        "responsable",
-        "merch_lapiceros_normales",
-        "merch_lapicero_ejecutivos",
-        "merch_blocks",
-        "merch_tacos",
-        "merch_gel_botella",
-        "merch_bolas_antiestres",
-        "merch_padmouse",
-        "merch_bolsa",
-        "merch_lapiceros_esco",
-        "observaciones"
-    ]
+    # Aquí recorres TODAS las claves que llegan en el JSON
     columnas = []
     valores = []
-    for campo in campos:
-        if campo in data:
-            columnas.append(campo)
-            valores.append(data[campo])
+    for key, val in data.items():
+        # Aceptas las que sean 'responsable', 'observaciones' o empiecen con merch_
+        if key in ['responsable', 'observaciones'] or key.startswith('merch_'):
+            columnas.append(key)
+            valores.append(val)
 
     if not columnas:
         return jsonify({"error": "No se han enviado campos válidos para insertar."}), 400
 
     placeholders = ", ".join(["%s"] * len(valores))
-    columnas_str = ", ".join(columnas)
+    columnas_str = ", ".join(f"`{col}`" for col in columnas)  # Importante usar backticks
     query = f"INSERT INTO {table_name} ({columnas_str}) VALUES ({placeholders});"
 
     conn = get_db_connection()
@@ -206,6 +194,7 @@ def agregar_inventario():
     finally:
         cursor.close()
         conn.close()
+
 
 
 # POST: Agregar un nuevo tipo de producto (nueva columna) en la tabla + insertar un registro
