@@ -533,6 +533,24 @@ def confirmar_solicitud(solicitud_id):
         cursor.close()
         conn.close()
 
+# GET: Obtener todas las confirmaciones de solicitudes
+@app.route('/api/confirmaciones', methods=['GET'])
+def obtener_confirmaciones():
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"error": "Error de conexión a la base de datos"}), 500
+
+    cursor = conn.cursor(dictionary=True)
+    try:
+        query = "SELECT * FROM inventario_solicitudes_conf ORDER BY timestamp DESC;"
+        cursor.execute(query)
+        confirmaciones = cursor.fetchall()
+        return jsonify(confirmaciones), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
 
 
 
