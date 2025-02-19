@@ -140,51 +140,95 @@ create_tables()
 # FUNCIÓN PARA ENVIAR CORREO
 # ---------------------------------------------------------
 def send_email_solicitud(data):
-    """
-    Envía un correo con la información de la nueva solicitud creada.
-    `data` es un diccionario con los campos de la solicitud.
-    """
-    # Destinatarios a los que quieres enviar la notificación
     recipients = [
         "jcamacho@kossodo.com",
         "rbazan@kossodo.com",
         "eventos@kossodo.com"
     ]
+    subject = f"Nueva Solicitud de Inventario (ID: {data.get('id', 'N/A')}) - KMJMerchandising"
 
-    # Asunto del correo
-    subject = f"Nueva Solicitud de Inventario (ID: {data.get('id', 'N/A')})"
+    # Construimos el cuerpo en HTML, inyectando los datos
+    body_html = f"""
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          /* Tus estilos CSS aquí (igual que el ejemplo anterior) */
+        </style>
+      </head>
+      <body>
+        <div style="font-family:Arial, sans-serif; max-width:600px; margin:0 auto; background-color:#fff; padding:20px;">
+          <h2 style="color:#006699;">Nueva Solicitud de KMJMerchandising</h2>
+          <p>Estimados,</p>
+          <p>Se ha registrado una nueva solicitud de inventario con la siguiente información:</p>
 
-    # Cuerpo del correo (texto plano)
-    body = f"""
-Estimados,
+          <table style="border-collapse: collapse; width:100%; margin:20px 0;">
+            <tr>
+              <th style="border:1px solid #ccc; padding:8px;">ID</th>
+              <td style="border:1px solid #ccc; padding:8px;">{data.get('id', 'N/A')}</td>
+            </tr>
+            <tr>
+              <th style="border:1px solid #ccc; padding:8px;">Fecha/Hora de Registro</th>
+              <td style="border:1px solid #ccc; padding:8px;">{data.get('timestamp', 'N/A')}</td>
+            </tr>
+            <tr>
+              <th style="border:1px solid #ccc; padding:8px;">Solicitante</th>
+              <td style="border:1px solid #ccc; padding:8px;">{data.get('solicitante', 'N/A')}</td>
+            </tr>
+            <tr>
+              <th style="border:1px solid #ccc; padding:8px;">Grupo</th>
+              <td style="border:1px solid #ccc; padding:8px;">{data.get('grupo', 'N/A')}</td>
+            </tr>
+            <tr>
+              <th style="border:1px solid #ccc; padding:8px;">RUC</th>
+              <td style="border:1px solid #ccc; padding:8px;">{data.get('ruc', 'N/A')}</td>
+            </tr>
+            <tr>
+              <th style="border:1px solid #ccc; padding:8px;">Fecha de Visita</th>
+              <td style="border:1px solid #ccc; padding:8px;">{data.get('fecha_visita', 'N/A')}</td>
+            </tr>
+            <tr>
+              <th style="border:1px solid #ccc; padding:8px;">Cantidad de Packs</th>
+              <td style="border:1px solid #ccc; padding:8px;">{data.get('cantidad_packs', 'N/A')}</td>
+            </tr>
+            <tr>
+              <th style="border:1px solid #ccc; padding:8px;">Productos</th>
+              <td style="border:1px solid #ccc; padding:8px;">{data.get('productos', '[]')}</td>
+            </tr>
+            <tr>
+              <th style="border:1px solid #ccc; padding:8px;">Catálogos</th>
+              <td style="border:1px solid #ccc; padding:8px;">{data.get('catalogos', 'N/A')}</td>
+            </tr>
+            <tr>
+              <th style="border:1px solid #ccc; padding:8px;">Estado</th>
+              <td style="border:1px solid #ccc; padding:8px;">{data.get('status', 'pending')}</td>
+            </tr>
+          </table>
 
-Se ha registrado una nueva solicitud de inventario con la siguiente información:
+          <p>Para aprobar o procesar esta solicitud, haga clic en el siguiente enlace:</p>
+          <p>
+            <a href="https://kossodo.estilovisual.com/marketing/inventario/confirmacion.html"
+               style="display:inline-block; background-color:#006699; color:#fff; padding:10px 20px;
+               text-decoration:none; border-radius:4px;">
+               Aprobar/Procesar Solicitud
+            </a>
+          </p>
 
-- ID: {data.get('id', 'N/A')}
-- Fecha/Hora de Registro: {data.get('timestamp', 'N/A')}
-- Solicitante: {data.get('solicitante', 'N/A')}
-- Grupo: {data.get('grupo', 'N/A')}
-- RUC: {data.get('ruc', 'N/A')}
-- Fecha de Visita: {data.get('fecha_visita', 'N/A')}
-- Cantidad de Packs: {data.get('cantidad_packs', 'N/A')}
-- Productos: {data.get('productos', '[]')}
-- Catálogos: {data.get('catalogos', 'N/A')}
-- Estado: {data.get('status', 'pending')}
+          <p>Si necesita más información, revise la solicitud directamente en el sistema.</p>
+          <p>Saludos cordiales,<br><strong>Sistema de Inventario</strong></p>
+        </div>
+      </body>
+    </html>
+    """
 
-Por favor, revise la solicitud en el sistema para más detalles.
+    msg = MIMEMultipart("alternative")
+    msg["From"] = EMAIL_USER
+    msg["To"] = ", ".join(recipients)
+    msg["Subject"] = subject
 
-Saludos cordiales,
-Sistema de Inventario
-"""
+    # Adjuntamos el cuerpo en formato HTML
+    msg.attach(MIMEText(body_html, "html"))
 
-    # Construimos el mensaje
-    msg = MIMEMultipart()
-    msg['From'] = EMAIL_USER
-    msg['To'] = ", ".join(recipients)
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain'))
-
-    # Conexión y envío por SMTP
     try:
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
@@ -194,6 +238,7 @@ Sistema de Inventario
         print("Correo enviado exitosamente.")
     except Exception as e:
         print("Error al enviar el correo:", e)
+
 
 
 # ---------------------------------------------------------
