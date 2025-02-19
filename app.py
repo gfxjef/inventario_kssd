@@ -1,21 +1,28 @@
 import os
 import json
-import mysql.connector
-from mysql.connector import Error
+import smtplib
+from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from datetime import datetime
+import mysql.connector
+from mysql.connector import Error
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 app = Flask(__name__)
 
-# Configuración de CORS (ajusta orígenes según tu necesidad)
+# ---------------------------------------------------------
+# CONFIGURACIÓN DE CORS
+# ---------------------------------------------------------
 CORS(app, resources={r"/*": {"origins": [
     "http://kossodo.estilovisual.com",
     "https://kossodo.estilovisual.com",
     "https://atusaludlicoreria.com"
 ]}})
 
-# Configuración de la base de datos
+# ---------------------------------------------------------
+# CONFIGURACIÓN DE LA BASE DE DATOS
+# ---------------------------------------------------------
 DB_CONFIG = {
     'user': os.environ.get('MYSQL_USER'),
     'password': os.environ.get('MYSQL_PASSWORD'),
@@ -24,11 +31,30 @@ DB_CONFIG = {
     'port': 3306
 }
 
-#######################################
-# Creación de tablas en la base de datos
-#######################################
+# ---------------------------------------------------------
+# CREDENCIALES DE EMAIL (DESDE VARIABLES DE ENTORNO)
+# ---------------------------------------------------------
+EMAIL_USER = os.environ.get('EMAIL_USER')
+EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
 
-# Columnas para las tablas de inventario de productos (merch)
+# ---------------------------------------------------------
+# FUNCIÓN DE CONEXIÓN A BD
+# ---------------------------------------------------------
+def get_db_connection():
+    """
+    Retorna la conexión a la base de datos usando DB_CONFIG.
+    """
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        return conn
+    except Error as e:
+        print(f"Error de conexión: {e}")
+        return None
+
+# ---------------------------------------------------------
+# CREACIÓN DE TABLAS AL INICIAR LA APLICACIÓN
+# ---------------------------------------------------------
+# Tablas de inventario (merch)
 merch_columns = [
     "id INT AUTO_INCREMENT PRIMARY KEY",
     "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP",
@@ -56,7 +82,7 @@ table_queries = {}
 for table in TABLES_MERCH:
     table_queries[table] = f"CREATE TABLE IF NOT EXISTS {table} ({columns_merch_str});"
 
-# Tabla de solicitudes (con status='pending' por defecto)
+# Tabla de solicitudes
 solicitudes_columns = [
     "id INT AUTO_INCREMENT PRIMARY KEY",
     "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP",
@@ -81,24 +107,12 @@ conf_columns = [
     "confirmador VARCHAR(255) NOT NULL",
     "observaciones TEXT",
     "productos TEXT",  # Aquí se guardará la información en formato JSON
+    "grupo VARCHAR(50)",
     "FOREIGN KEY (solicitud_id) REFERENCES inventario_solicitudes(id)"
 ]
-
 table_queries["inventario_solicitudes_conf"] = (
     f"CREATE TABLE IF NOT EXISTS inventario_solicitudes_conf ({', '.join(conf_columns)});"
 )
-
-
-def get_db_connection():
-    """
-    Retorna la conexión a la base de datos usando DB_CONFIG.
-    """
-    try:
-        conn = mysql.connector.connect(**DB_CONFIG)
-        return conn
-    except Error as e:
-        print(f"Error de conexión: {e}")
-        return None
 
 def create_tables():
     """
@@ -122,9 +136,69 @@ def create_tables():
 # Ejecutar la creación de tablas al iniciar la aplicación
 create_tables()
 
-#######################################
-# Endpoints para Inventario (Merch)
-#######################################
+# ---------------------------------------------------------
+# FUNCIÓN PARA ENVIAR CORREO
+# ---------------------------------------------------------
+def send_email_solicitud(data):
+    """
+    Envía un correo con la información de la nueva solicitud creada.
+    `data` es un diccionario con los campos de la solicitud.
+    """
+    # Destinatarios a los que quieres enviar la notificación
+    recipients = [
+        "jcamacho@kossodo.com",
+        "rbazan@kossodo.com",
+        "eventos@kossodo.com"
+    ]
+
+    # Asunto del correo
+    subject = f"Nueva Solicitud de Inventario (ID: {data.get('id', 'N/A')})"
+
+    # Cuerpo del correo (texto plano)
+    body = f"""
+Estimados,
+
+Se ha registrado una nueva solicitud de inventario con la siguiente información:
+
+- ID: {data.get('id', 'N/A')}
+- Fecha/Hora de Registro: {data.get('timestamp', 'N/A')}
+- Solicitante: {data.get('solicitante', 'N/A')}
+- Grupo: {data.get('grupo', 'N/A')}
+- RUC: {data.get('ruc', 'N/A')}
+- Fecha de Visita: {data.get('fecha_visita', 'N/A')}
+- Cantidad de Packs: {data.get('cantidad_packs', 'N/A')}
+- Productos: {data.get('productos', '[]')}
+- Catálogos: {data.get('catalogos', 'N/A')}
+- Estado: {data.get('status', 'pending')}
+
+Por favor, revise la solicitud en el sistema para más detalles.
+
+Saludos cordiales,
+Sistema de Inventario
+"""
+
+    # Construimos el mensaje
+    msg = MIMEMultipart()
+    msg['From'] = EMAIL_USER
+    msg['To'] = ", ".join(recipients)
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+
+    # Conexión y envío por SMTP
+    try:
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_USER, recipients, msg.as_string())
+        server.quit()
+        print("Correo enviado exitosamente.")
+    except Exception as e:
+        print("Error al enviar el correo:", e)
+
+
+# ---------------------------------------------------------
+# ENDPOINTS DE INVENTARIO (MERCH)
+# ---------------------------------------------------------
 
 # GET: Obtener registros del inventario
 @app.route('/api/inventario', methods=['GET'])
@@ -162,11 +236,11 @@ def agregar_inventario():
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
 
-    # Aquí recorres TODAS las claves que llegan en el JSON
+    # Recorremos todas las claves que llegan en el JSON
     columnas = []
     valores = []
     for key, val in data.items():
-        # Aceptas las que sean 'responsable', 'observaciones' o empiecen con merch_
+        # Aceptamos las que sean 'responsable', 'observaciones' o empiecen con merch_
         if key in ['responsable', 'observaciones'] or key.startswith('merch_'):
             columnas.append(key)
             valores.append(val)
@@ -196,7 +270,6 @@ def agregar_inventario():
         conn.close()
 
 
-
 # POST: Agregar un nuevo tipo de producto (nueva columna) en la tabla + insertar un registro
 @app.route('/api/nuevo_producto', methods=['POST'])
 def nuevo_producto():
@@ -222,7 +295,7 @@ def nuevo_producto():
     cursor = conn.cursor()
     try:
         # Verificar si la columna ya existe
-        db_name = DB_CONFIG['database']  # Tomamos el nombre de la DB desde DB_CONFIG
+        db_name = DB_CONFIG['database']
         query_check = """
             SELECT COUNT(*) FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s;
@@ -236,7 +309,7 @@ def nuevo_producto():
             cursor.execute(alter_sql)
             conn.commit()
 
-        # Insertar un registro con la cantidad inicial (o 0)
+        # Insertar un registro con la cantidad inicial
         insert_sql = f"INSERT INTO {table_name} (`{columna}`) VALUES (%s);"
         cursor.execute(insert_sql, (cantidad,))
         conn.commit()
@@ -255,8 +328,6 @@ def nuevo_producto():
 # GET: Obtener el stock calculado y actualizar inventario_stock_{grupo}
 @app.route('/api/stock', methods=['GET'])
 def obtener_stock():
-    import json
-
     grupo = request.args.get('grupo')
     if grupo not in ['kossodo', 'kossomet']:
         return jsonify({"error": "Grupo inválido. Use 'kossodo' o 'kossomet'."}), 400
@@ -288,16 +359,13 @@ def obtener_stock():
             total = result['total'] if result['total'] is not None else 0
             inventory_totals[col] = total
 
-        # 3. Calcular total confirmado por producto (sumando todas las confirmaciones del grupo)
-        #    Se obtiene la información de la tabla 'inventario_solicitudes_conf' y se parsea el JSON de la columna 'productos'
+        # 3. Calcular total confirmado por producto (sumando confirmaciones del grupo)
         request_totals = {col: 0 for col in cols}
         query_conf = "SELECT productos FROM inventario_solicitudes_conf WHERE grupo = %s"
         cursor.execute(query_conf, (grupo,))
         conf_rows = cursor.fetchall()
         for row in conf_rows:
             try:
-                # Se espera que 'productos' sea un JSON con el formato:
-                # {"merch_lapicero_kossodo": 1, "merch_bolsas": 1, ...}
                 productos_dict = json.loads(row['productos']) if row['productos'] else {}
             except Exception:
                 productos_dict = {}
@@ -361,14 +429,11 @@ def obtener_stock():
         cursor.close()
         conn.close()
 
+# ---------------------------------------------------------
+# ENDPOINTS PARA SOLICITUDES
+# ---------------------------------------------------------
 
-
-
-#######################################
-# Endpoints para Solicitudes
-#######################################
-
-# POST: Crear una nueva solicitud
+# POST: Crear una nueva solicitud (ENVÍA CORREO AL FINAL)
 @app.route('/api/solicitud', methods=['POST'])
 def crear_solicitud():
     data = request.get_json()
@@ -391,10 +456,10 @@ def crear_solicitud():
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
-    cursor = conn.cursor()
 
+    cursor = conn.cursor()
     try:
-        # Ejecuta siempre el CREATE TABLE IF NOT EXISTS para inventario_solicitudes
+        # Aseguramos que la tabla existe
         create_table_sql = """
             CREATE TABLE IF NOT EXISTS inventario_solicitudes (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -412,7 +477,7 @@ def crear_solicitud():
         cursor.execute(create_table_sql)
         conn.commit()
 
-        # Inserta la nueva solicitud
+        # Insertar la nueva solicitud
         insert_sql = """
             INSERT INTO inventario_solicitudes
             (solicitante, grupo, ruc, fecha_visita, cantidad_packs, productos, catalogos)
@@ -423,6 +488,25 @@ def crear_solicitud():
         conn.commit()
 
         nuevo_id = cursor.lastrowid
+
+        # Preparar datos para el correo
+        # Podríamos recuperar el timestamp exacto de la BD, pero para simplificar usamos datetime.now()
+        solicitud_data = {
+            "id": nuevo_id,
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "solicitante": solicitante,
+            "grupo": grupo,
+            "ruc": ruc,
+            "fecha_visita": fecha_visita,
+            "cantidad_packs": cantidad_packs,
+            "productos": productos,
+            "catalogos": catalogos,
+            "status": "pending"
+        }
+
+        # Llamada a la función que envía el correo
+        send_email_solicitud(solicitud_data)
+
         return jsonify({"message": "Solicitud creada exitosamente", "id": nuevo_id}), 201
 
     except Error as e:
@@ -479,7 +563,7 @@ def confirmar_solicitud(solicitud_id):
 
     confirmador = data.get('confirmador')
     observaciones = data.get('observaciones', "")
-    productos_finales = data.get('productos', {})  # Ejemplo: {"merch_lapicero_clasico": 5, "merch_padmouse": 5}
+    productos_finales = data.get('productos', {})  # {"merch_lapicero_clasico": 5, ...}
 
     if not confirmador:
         return jsonify({"error": "El campo 'confirmador' es requerido."}), 400
@@ -504,8 +588,7 @@ def confirmar_solicitud(solicitud_id):
         grupo = solicitud['grupo']
         conf_table = "inventario_solicitudes_conf"
 
-        # 2. Insertar el registro de confirmación con los datos en formato JSON, incluyendo el campo grupo
-        import json
+        # 2. Insertar el registro de confirmación
         productos_json = json.dumps(productos_finales) if productos_finales else None
         insert_sql = f"""
             INSERT INTO {conf_table} (solicitud_id, confirmador, observaciones, productos, grupo)
@@ -519,8 +602,7 @@ def confirmar_solicitud(solicitud_id):
             (solicitud_id,)
         )
 
-        # NOTA: Se ha eliminado la inserción en la tabla de inventario (los registros negativos)
-        # para que luego se realice la resta en el cálculo de stock.
+        # (No se insertan registros negativos en inventario; el stock se calcula luego en /api/stock)
 
         conn.commit()
         return jsonify({"message": "Solicitud confirmada exitosamente"}), 200
@@ -552,8 +634,9 @@ def obtener_confirmaciones():
         cursor.close()
         conn.close()
 
-
-
+# ---------------------------------------------------------
+# FUNCIÓN UTILITARIA PARA ASEGURAR COLUMNAS
+# ---------------------------------------------------------
 def ensure_column_exists(cursor, table_name, column_name):
     """
     Verifica si una columna existe en la tabla dada (table_name)
@@ -561,7 +644,7 @@ def ensure_column_exists(cursor, table_name, column_name):
     definida en DB_CONFIG.
     """
     try:
-        db_name = DB_CONFIG['database']  # Importante: usar la misma DB
+        db_name = DB_CONFIG['database']
         query_check = """
             SELECT COUNT(*) FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s;
@@ -580,8 +663,8 @@ def ensure_column_exists(cursor, table_name, column_name):
         print(f"Error al verificar/crear columna {column_name}: {str(e)}")
         raise
 
-#######################################
-# Inicio de la aplicación
-#######################################
+# ---------------------------------------------------------
+# EJECUTAR LA APLICACIÓN
+# ---------------------------------------------------------
 if __name__ == '__main__':
     app.run(debug=True)
