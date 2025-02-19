@@ -149,6 +149,7 @@ def send_email_solicitud(data):
     recipients = [
         "jcamacho@kossodo.com",
         "rbazan@kossodo.com",
+        "creatividad@kossodo.com",
         "eventos@kossodo.com"
     ]
 
