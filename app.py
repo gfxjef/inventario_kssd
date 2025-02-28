@@ -14,11 +14,23 @@ app = Flask(__name__)
 # ---------------------------------------------------------
 # CONFIGURACIÓN DE CORS
 # ---------------------------------------------------------
-CORS(app, resources={r"/*": {"origins": [
+allowed_origins = [
     "http://kossodo.estilovisual.com",
     "https://kossodo.estilovisual.com",
     "https://atusaludlicoreria.com"
-]}})
+]
+# Se configura CORS solo para las rutas que comienzan con /api/
+CORS(app, resources={r"/api/*": {"origins": allowed_origins}}, supports_credentials=True)
+
+@app.after_request
+def add_cors_headers(response):
+    origin = request.headers.get('Origin')
+    if origin in allowed_origins:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+        response.headers.add('Vary', 'Origin')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    return response
 
 # ---------------------------------------------------------
 # CONFIGURACIÓN DE LA BASE DE DATOS
@@ -170,7 +182,6 @@ def send_email_solicitud(data):
     productos_html = "".join(f"<li>{p}</li>" for p in productos)
 
     # Construimos el cuerpo en HTML
-    # Encabezado: "Nueva Solicitud de #nombre del Solicitante#"
     body_html = f"""
     <html>
       <head>
@@ -226,14 +237,11 @@ def send_email_solicitud(data):
       </head>
       <body>
         <div class="container">
-          <!-- Encabezado con nombre del solicitante -->
           <h2>Nueva Solicitud de {data.get('solicitante', 'N/A')}</h2>
-
           <p>Estimados,</p>
           <p>
             Se ha registrado una nueva solicitud de inventario con la siguiente información:
           </p>
-
           <table>
             <tr>
               <th>ID</th>
@@ -280,7 +288,6 @@ def send_email_solicitud(data):
               <td>{data.get('status', 'pending')}</td>
             </tr>
           </table>
-
           <p>
             Para aprobar o procesar esta solicitud, por favor haga clic en el siguiente enlace:
           </p>
@@ -289,14 +296,11 @@ def send_email_solicitud(data):
               Aprobar/Procesar Solicitud
             </a>
           </p>
-
           <p>
             Si necesita más información, revise la solicitud directamente en el sistema.
           </p>
-
           <p>Saludos cordiales,<br/>
           <strong>Sistema de Inventario</strong></p>
-
           <div class="footer">
             Este mensaje ha sido generado automáticamente. Por favor, no responda a este correo.
           </div>
@@ -305,16 +309,12 @@ def send_email_solicitud(data):
     </html>
     """
 
-    # Creamos el mensaje MIME
     msg = MIMEMultipart("alternative")
     msg["From"] = EMAIL_USER
     msg["To"] = ", ".join(recipients)
     msg["Subject"] = subject
-
-    # Adjuntamos el cuerpo en formato HTML
     msg.attach(MIMEText(body_html, "html"))
 
-    # Enviamos el correo
     try:
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
@@ -325,14 +325,10 @@ def send_email_solicitud(data):
     except Exception as e:
         print("Error al enviar el correo:", e)
 
-
-
-
 # ---------------------------------------------------------
 # ENDPOINTS DE INVENTARIO (MERCH)
 # ---------------------------------------------------------
 
-# GET: Obtener registros del inventario
 @app.route('/api/inventario', methods=['GET'])
 def obtener_inventario():
     tabla_param = request.args.get('tabla')
@@ -355,8 +351,6 @@ def obtener_inventario():
         cursor.close()
         conn.close()
 
-
-# POST: Agregar un nuevo registro al inventario
 @app.route('/api/inventario', methods=['POST'])
 def agregar_inventario():
     tabla_param = request.args.get('tabla')
@@ -368,11 +362,9 @@ def agregar_inventario():
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
 
-    # Recorremos todas las claves que llegan en el JSON
     columnas = []
     valores = []
     for key, val in data.items():
-        # Aceptamos las que sean 'responsable', 'observaciones' o empiecen con merch_
         if key in ['responsable', 'observaciones'] or key.startswith('merch_'):
             columnas.append(key)
             valores.append(val)
@@ -381,7 +373,7 @@ def agregar_inventario():
         return jsonify({"error": "No se han enviado campos válidos para insertar."}), 400
 
     placeholders = ", ".join(["%s"] * len(valores))
-    columnas_str = ", ".join(f"`{col}`" for col in columnas)  # Importante usar backticks
+    columnas_str = ", ".join(f"`{col}`" for col in columnas)
     query = f"INSERT INTO {table_name} ({columnas_str}) VALUES ({placeholders});"
 
     conn = get_db_connection()
@@ -401,8 +393,6 @@ def agregar_inventario():
         cursor.close()
         conn.close()
 
-
-# POST: Agregar un nuevo tipo de producto (nueva columna) en la tabla + insertar un registro
 @app.route('/api/nuevo_producto', methods=['POST'])
 def nuevo_producto():
     data = request.get_json()
@@ -410,8 +400,8 @@ def nuevo_producto():
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
 
     grupo = data.get('grupo')
-    nombre_producto = data.get('nombre_producto')  # Nombre original (solo informativo)
-    columna = data.get('columna')  # Ej: "merch_lapicero_esco"
+    nombre_producto = data.get('nombre_producto')
+    columna = data.get('columna')
     cantidad = data.get('cantidad', 0)
 
     if grupo not in ['kossodo', 'kossomet']:
@@ -426,7 +416,6 @@ def nuevo_producto():
 
     cursor = conn.cursor()
     try:
-        # Verificar si la columna ya existe
         db_name = DB_CONFIG['database']
         query_check = """
             SELECT COUNT(*) FROM information_schema.COLUMNS
@@ -436,12 +425,10 @@ def nuevo_producto():
         (existe,) = cursor.fetchone()
 
         if existe == 0:
-            # Crear la columna si no existe
             alter_sql = f"ALTER TABLE {table_name} ADD COLUMN `{columna}` INT DEFAULT 0;"
             cursor.execute(alter_sql)
             conn.commit()
 
-        # Insertar un registro con la cantidad inicial
         insert_sql = f"INSERT INTO {table_name} (`{columna}`) VALUES (%s);"
         cursor.execute(insert_sql, (cantidad,))
         conn.commit()
@@ -456,8 +443,6 @@ def nuevo_producto():
         cursor.close()
         conn.close()
 
-
-# GET: Obtener el stock calculado y actualizar inventario_stock_{grupo}
 @app.route('/api/stock', methods=['GET'])
 def obtener_stock():
     grupo = request.args.get('grupo')
@@ -473,7 +458,6 @@ def obtener_stock():
     cursor = conn.cursor(dictionary=True)
     try:
         db_name = DB_CONFIG['database']
-        # 1. Obtener columnas "merch_*" en la tabla de inventario
         query_cols = """
             SELECT COLUMN_NAME
             FROM information_schema.COLUMNS
@@ -482,7 +466,6 @@ def obtener_stock():
         cursor.execute(query_cols, (db_name, inventario_table))
         cols = [row['COLUMN_NAME'] for row in cursor.fetchall()]
 
-        # 2. Sumar totales de inventario por producto
         inventory_totals = {}
         for col in cols:
             query_sum = f"SELECT SUM(`{col}`) AS total FROM {inventario_table}"
@@ -491,7 +474,6 @@ def obtener_stock():
             total = result['total'] if result['total'] is not None else 0
             inventory_totals[col] = total
 
-        # 3. Calcular total confirmado por producto (sumando confirmaciones del grupo)
         request_totals = {col: 0 for col in cols}
         query_conf = "SELECT productos FROM inventario_solicitudes_conf WHERE grupo = %s"
         cursor.execute(query_conf, (grupo,))
@@ -505,12 +487,10 @@ def obtener_stock():
                 if prod in request_totals:
                     request_totals[prod] += qty
 
-        # 4. Calcular el stock final por producto: inventario - confirmaciones
         stock = {}
         for col in cols:
             stock[col] = inventory_totals.get(col, 0) - request_totals.get(col, 0)
 
-        # 5. Crear la tabla de stock si no existe
         create_stock_query = f"""
             CREATE TABLE IF NOT EXISTS {stock_table} (
                 id INT PRIMARY KEY,
@@ -520,7 +500,6 @@ def obtener_stock():
         cursor.execute(create_stock_query)
         conn.commit()
 
-        # Verificar qué columnas existen en la tabla de stock
         query_cols_stock = """
             SELECT COLUMN_NAME
             FROM information_schema.COLUMNS
@@ -529,14 +508,12 @@ def obtener_stock():
         cursor.execute(query_cols_stock, (db_name, stock_table))
         stock_cols_existing = {row['COLUMN_NAME'] for row in cursor.fetchall()}
 
-        # Agregar columnas que falten en la tabla de stock
         for col in cols:
             if col not in stock_cols_existing:
                 alter_query = f"ALTER TABLE {stock_table} ADD COLUMN `{col}` INT DEFAULT 0;"
                 cursor.execute(alter_query)
                 conn.commit()
 
-        # 6. Actualizar (o insertar) la fila con id=1 en la tabla de stock
         columns_list = ', '.join([f"`{col}`" for col in cols])
         placeholders = ', '.join(['%s'] * len(cols))
         values = [stock[col] for col in cols]
@@ -549,7 +526,6 @@ def obtener_stock():
         cursor.execute(insert_query, values)
         conn.commit()
 
-        # 7. Retornar la fila actualizada de la tabla de stock
         cursor.execute(f"SELECT * FROM {stock_table} WHERE id = 1;")
         stock_row = cursor.fetchone()
         return jsonify(stock_row), 200
@@ -565,7 +541,6 @@ def obtener_stock():
 # ENDPOINTS PARA SOLICITUDES
 # ---------------------------------------------------------
 
-# POST: Crear una nueva solicitud (ENVÍA CORREO AL FINAL)
 @app.route('/api/solicitud', methods=['POST'])
 def crear_solicitud():
     data = request.get_json()
@@ -591,7 +566,6 @@ def crear_solicitud():
 
     cursor = conn.cursor()
     try:
-        # Aseguramos que la tabla existe
         create_table_sql = """
             CREATE TABLE IF NOT EXISTS inventario_solicitudes (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -609,7 +583,6 @@ def crear_solicitud():
         cursor.execute(create_table_sql)
         conn.commit()
 
-        # Insertar la nueva solicitud
         insert_sql = """
             INSERT INTO inventario_solicitudes
             (solicitante, grupo, ruc, fecha_visita, cantidad_packs, productos, catalogos)
@@ -621,8 +594,6 @@ def crear_solicitud():
 
         nuevo_id = cursor.lastrowid
 
-        # Preparar datos para el correo
-        # Podríamos recuperar el timestamp exacto de la BD, pero para simplificar usamos datetime.now()
         solicitud_data = {
             "id": nuevo_id,
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -636,7 +607,6 @@ def crear_solicitud():
             "status": "pending"
         }
 
-        # Llamada a la función que envía el correo
         send_email_solicitud(solicitud_data)
 
         return jsonify({"message": "Solicitud creada exitosamente", "id": nuevo_id}), 201
@@ -648,8 +618,6 @@ def crear_solicitud():
         cursor.close()
         conn.close()
 
-
-# GET: Listar solicitudes (permite filtrar por ?status=pending|... y/o ?id=123)
 @app.route('/api/solicitudes', methods=['GET'])
 def obtener_solicitudes():
     conn = get_db_connection()
@@ -685,8 +653,6 @@ def obtener_solicitudes():
         cursor.close()
         conn.close()
 
-
-# PUT: Confirmar una solicitud (almacenar en inventario_solicitudes_conf + restar stock)
 @app.route('/api/solicitudes/<int:solicitud_id>/confirm', methods=['PUT'])
 def confirmar_solicitud(solicitud_id):
     data = request.get_json()
@@ -695,7 +661,7 @@ def confirmar_solicitud(solicitud_id):
 
     confirmador = data.get('confirmador')
     observaciones = data.get('observaciones', "")
-    productos_finales = data.get('productos', {})  # {"merch_lapicero_clasico": 5, ...}
+    productos_finales = data.get('productos', {})
 
     if not confirmador:
         return jsonify({"error": "El campo 'confirmador' es requerido."}), 400
@@ -706,7 +672,6 @@ def confirmar_solicitud(solicitud_id):
 
     cursor = conn.cursor(dictionary=True)
     try:
-        # 1. Verificar que la solicitud existe y su estado
         cursor.execute("SELECT status, grupo FROM inventario_solicitudes WHERE id = %s", (solicitud_id,))
         solicitud = cursor.fetchone()
         if not solicitud:
@@ -720,7 +685,6 @@ def confirmar_solicitud(solicitud_id):
         grupo = solicitud['grupo']
         conf_table = "inventario_solicitudes_conf"
 
-        # 2. Insertar el registro de confirmación
         productos_json = json.dumps(productos_finales) if productos_finales else None
         insert_sql = f"""
             INSERT INTO {conf_table} (solicitud_id, confirmador, observaciones, productos, grupo)
@@ -728,13 +692,10 @@ def confirmar_solicitud(solicitud_id):
         """
         cursor.execute(insert_sql, (solicitud_id, confirmador, observaciones, productos_json, grupo))
 
-        # 3. Actualizar el estado de la solicitud a 'confirmed'
         cursor.execute(
             "UPDATE inventario_solicitudes SET status = 'confirmed' WHERE id = %s",
             (solicitud_id,)
         )
-
-        # (No se insertan registros negativos en inventario; el stock se calcula luego en /api/stock)
 
         conn.commit()
         return jsonify({"message": "Solicitud confirmada exitosamente"}), 200
@@ -747,7 +708,6 @@ def confirmar_solicitud(solicitud_id):
         cursor.close()
         conn.close()
 
-# GET: Obtener todas las confirmaciones de solicitudes
 @app.route('/api/confirmaciones', methods=['GET'])
 def obtener_confirmaciones():
     conn = get_db_connection()
@@ -766,14 +726,10 @@ def obtener_confirmaciones():
         cursor.close()
         conn.close()
 
-# ---------------------------------------------------------
-# FUNCIÓN UTILITARIA PARA ASEGURAR COLUMNAS
-# ---------------------------------------------------------
 def ensure_column_exists(cursor, table_name, column_name):
     """
     Verifica si una columna existe en la tabla dada (table_name)
-    y la crea si no existe. Apunta a la misma base de datos
-    definida en DB_CONFIG.
+    y la crea si no existe.
     """
     try:
         db_name = DB_CONFIG['database']
