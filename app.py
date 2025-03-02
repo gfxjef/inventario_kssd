@@ -8,6 +8,7 @@ import mysql.connector
 from mysql.connector import Error
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__)
 
@@ -19,7 +20,7 @@ allowed_origins = [
     "https://kossodo.estilovisual.com",
     "https://atusaludlicoreria.com"
 ]
-# Se configura CORS solo para las rutas que comienzan con /api/
+# Configuramos CORS para las rutas que comienzan con /api/
 CORS(app, resources={r"/api/*": {"origins": allowed_origins}}, supports_credentials=True)
 
 @app.after_request
@@ -30,6 +31,18 @@ def add_cors_headers(response):
         response.headers.add('Vary', 'Origin')
     response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    return response
+
+# ---------------------------------------------------------
+# MANEJADOR GLOBAL DE ERRORES (asegura CORS en respuestas de error)
+# ---------------------------------------------------------
+@app.errorhandler(Exception)
+def handle_exception(e):
+    code = 500
+    if isinstance(e, HTTPException):
+        code = e.code
+    response = jsonify({"error": str(e)})
+    response.status_code = code
     return response
 
 # ---------------------------------------------------------
@@ -53,9 +66,6 @@ EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
 # FUNCIÓN DE CONEXIÓN A BD
 # ---------------------------------------------------------
 def get_db_connection():
-    """
-    Retorna la conexión a la base de datos usando DB_CONFIG.
-    """
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         return conn
@@ -66,7 +76,6 @@ def get_db_connection():
 # ---------------------------------------------------------
 # CREACIÓN DE TABLAS AL INICIAR LA APLICACIÓN
 # ---------------------------------------------------------
-# Tablas de inventario (merch)
 merch_columns = [
     "id INT AUTO_INCREMENT PRIMARY KEY",
     "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP",
@@ -84,7 +93,6 @@ merch_columns = [
 ]
 columns_merch_str = ", ".join(merch_columns)
 
-# Tablas de inventario para Kossodo y Kossomet
 TABLES_MERCH = [
     "inventario_merch_kossodo",
     "inventario_merch_kossomet"
@@ -94,7 +102,6 @@ table_queries = {}
 for table in TABLES_MERCH:
     table_queries[table] = f"CREATE TABLE IF NOT EXISTS {table} ({columns_merch_str});"
 
-# Tabla de solicitudes
 solicitudes_columns = [
     "id INT AUTO_INCREMENT PRIMARY KEY",
     "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP",
@@ -111,14 +118,13 @@ table_queries["inventario_solicitudes"] = (
     f"CREATE TABLE IF NOT EXISTS inventario_solicitudes ({', '.join(solicitudes_columns)});"
 )
 
-# Tabla de confirmaciones de solicitudes
 conf_columns = [
     "id INT AUTO_INCREMENT PRIMARY KEY",
     "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP",
     "solicitud_id INT NOT NULL",
     "confirmador VARCHAR(255) NOT NULL",
     "observaciones TEXT",
-    "productos TEXT",  # Aquí se guardará la información en formato JSON
+    "productos TEXT",  # Información en formato JSON
     "grupo VARCHAR(50)",
     "FOREIGN KEY (solicitud_id) REFERENCES inventario_solicitudes(id)"
 ]
@@ -127,9 +133,6 @@ table_queries["inventario_solicitudes_conf"] = (
 )
 
 def create_tables():
-    """
-    Crea (o verifica) las tablas necesarias al iniciar la aplicación.
-    """
     conn = get_db_connection()
     if conn is None:
         print("No se pudo conectar a la base de datos")
@@ -145,43 +148,26 @@ def create_tables():
     cursor.close()
     conn.close()
 
-# Ejecutar la creación de tablas al iniciar la aplicación
 create_tables()
 
 # ---------------------------------------------------------
 # FUNCIÓN PARA ENVIAR CORREO
 # ---------------------------------------------------------
 def send_email_solicitud(data):
-    """
-    Envía un correo con la información de la nueva solicitud.
-    `data` es un diccionario con los campos de la solicitud.
-    """
-
-    # Destinatarios
     recipients = [
         "jcamacho@kossodo.com",
         "rbazan@kossodo.com",
         "creatividad@kossodo.com",
         "eventos@kossodo.com"
     ]
-
-    # Construimos el asunto según lo solicitado:
-    # Nueva Solicitud de Merchandising (ID: #) - # nombre del Solicitante #
     subject = f"Nueva Solicitud de Merchandising (ID: {data.get('id', 'N/A')}) - {data.get('solicitante', 'N/A')}"
-
-    # Convertimos la lista de productos en un <ul> con <li> para cada producto
     productos = data.get('productos', [])
-    # Si llegara como string, intenta parsearlo a lista:
     if isinstance(productos, str):
         try:
             productos = json.loads(productos)
         except:
             productos = []
-
-    # Generamos el HTML de cada producto en viñetas
     productos_html = "".join(f"<li>{p}</li>" for p in productos)
-
-    # Construimos el cuerpo en HTML
     body_html = f"""
     <html>
       <head>
@@ -239,9 +225,7 @@ def send_email_solicitud(data):
         <div class="container">
           <h2>Nueva Solicitud de {data.get('solicitante', 'N/A')}</h2>
           <p>Estimados,</p>
-          <p>
-            Se ha registrado una nueva solicitud de inventario con la siguiente información:
-          </p>
+          <p>Se ha registrado una nueva solicitud de inventario con la siguiente información:</p>
           <table>
             <tr>
               <th>ID</th>
@@ -274,9 +258,7 @@ def send_email_solicitud(data):
             <tr>
               <th>Productos</th>
               <td>
-                <ul>
-                  {productos_html}
-                </ul>
+                <ul>{productos_html}</ul>
               </td>
             </tr>
             <tr>
@@ -288,33 +270,26 @@ def send_email_solicitud(data):
               <td>{data.get('status', 'pending')}</td>
             </tr>
           </table>
-          <p>
-            Para aprobar o procesar esta solicitud, por favor haga clic en el siguiente enlace:
-          </p>
+          <p>Para aprobar o procesar esta solicitud, haga clic en el siguiente enlace:</p>
           <p>
             <a href="https://kossodo.estilovisual.com/marketing/inventario/confirmacion.html" class="button">
               Aprobar/Procesar Solicitud
             </a>
           </p>
-          <p>
-            Si necesita más información, revise la solicitud directamente en el sistema.
-          </p>
-          <p>Saludos cordiales,<br/>
-          <strong>Sistema de Inventario</strong></p>
+          <p>Si necesita más información, revise la solicitud en el sistema.</p>
+          <p>Saludos cordiales,<br/><strong>Sistema de Inventario</strong></p>
           <div class="footer">
-            Este mensaje ha sido generado automáticamente. Por favor, no responda a este correo.
+            Este mensaje ha sido generado automáticamente. No responda a este correo.
           </div>
         </div>
       </body>
     </html>
     """
-
     msg = MIMEMultipart("alternative")
     msg["From"] = EMAIL_USER
     msg["To"] = ", ".join(recipients)
     msg["Subject"] = subject
     msg.attach(MIMEText(body_html, "html"))
-
     try:
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
@@ -328,18 +303,15 @@ def send_email_solicitud(data):
 # ---------------------------------------------------------
 # ENDPOINTS DE INVENTARIO (MERCH)
 # ---------------------------------------------------------
-
 @app.route('/api/inventario', methods=['GET'])
 def obtener_inventario():
     tabla_param = request.args.get('tabla')
     if tabla_param not in ['kossodo', 'kossomet']:
         return jsonify({"error": "Parámetro 'tabla' inválido. Use 'kossodo' o 'kossomet'."}), 400
-
     table_name = f"inventario_merch_{tabla_param}"
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
-
     cursor = conn.cursor(dictionary=True)
     try:
         cursor.execute(f"SELECT * FROM {table_name} ORDER BY timestamp DESC;")
@@ -356,30 +328,24 @@ def agregar_inventario():
     tabla_param = request.args.get('tabla')
     if tabla_param not in ['kossodo', 'kossomet']:
         return jsonify({"error": "Parámetro 'tabla' inválido. Use 'kossodo' o 'kossomet'."}), 400
-
     table_name = f"inventario_merch_{tabla_param}"
     data = request.get_json()
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
-
     columnas = []
     valores = []
     for key, val in data.items():
         if key in ['responsable', 'observaciones'] or key.startswith('merch_'):
             columnas.append(key)
             valores.append(val)
-
     if not columnas:
         return jsonify({"error": "No se han enviado campos válidos para insertar."}), 400
-
     placeholders = ", ".join(["%s"] * len(valores))
     columnas_str = ", ".join(f"`{col}`" for col in columnas)
     query = f"INSERT INTO {table_name} ({columnas_str}) VALUES ({placeholders});"
-
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
-
     cursor = conn.cursor()
     try:
         cursor.execute(query, tuple(valores))
@@ -398,22 +364,18 @@ def nuevo_producto():
     data = request.get_json()
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
-
     grupo = data.get('grupo')
     nombre_producto = data.get('nombre_producto')
     columna = data.get('columna')
     cantidad = data.get('cantidad', 0)
-
     if grupo not in ['kossodo', 'kossomet']:
         return jsonify({"error": "El grupo debe ser 'kossodo' o 'kossomet'."}), 400
     if not columna or not nombre_producto:
         return jsonify({"error": "Faltan datos: nombre_producto o columna."}), 400
-
     table_name = f"inventario_merch_{grupo}"
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
-
     cursor = conn.cursor()
     try:
         db_name = DB_CONFIG['database']
@@ -423,19 +385,15 @@ def nuevo_producto():
         """
         cursor.execute(query_check, (db_name, table_name, columna))
         (existe,) = cursor.fetchone()
-
         if existe == 0:
             alter_sql = f"ALTER TABLE {table_name} ADD COLUMN `{columna}` INT DEFAULT 0;"
             cursor.execute(alter_sql)
             conn.commit()
-
         insert_sql = f"INSERT INTO {table_name} (`{columna}`) VALUES (%s);"
         cursor.execute(insert_sql, (cantidad,))
         conn.commit()
-
         nuevo_id = cursor.lastrowid
         return jsonify({"message": "Nuevo producto agregado correctamente", "id": nuevo_id}), 201
-
     except Exception as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
@@ -448,13 +406,11 @@ def obtener_stock():
     grupo = request.args.get('grupo')
     if grupo not in ['kossodo', 'kossomet']:
         return jsonify({"error": "Grupo inválido. Use 'kossodo' o 'kossomet'."}), 400
-
     inventario_table = f"inventario_merch_{grupo}"
     stock_table = f"inventario_stock_{grupo}"
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
-
     cursor = conn.cursor(dictionary=True)
     try:
         db_name = DB_CONFIG['database']
@@ -465,7 +421,6 @@ def obtener_stock():
         """
         cursor.execute(query_cols, (db_name, inventario_table))
         cols = [row['COLUMN_NAME'] for row in cursor.fetchall()]
-
         inventory_totals = {}
         for col in cols:
             query_sum = f"SELECT SUM(`{col}`) AS total FROM {inventario_table}"
@@ -473,7 +428,6 @@ def obtener_stock():
             result = cursor.fetchone()
             total = result['total'] if result['total'] is not None else 0
             inventory_totals[col] = total
-
         request_totals = {col: 0 for col in cols}
         query_conf = "SELECT productos FROM inventario_solicitudes_conf WHERE grupo = %s"
         cursor.execute(query_conf, (grupo,))
@@ -486,11 +440,9 @@ def obtener_stock():
             for prod, qty in productos_dict.items():
                 if prod in request_totals:
                     request_totals[prod] += qty
-
         stock = {}
         for col in cols:
             stock[col] = inventory_totals.get(col, 0) - request_totals.get(col, 0)
-
         create_stock_query = f"""
             CREATE TABLE IF NOT EXISTS {stock_table} (
                 id INT PRIMARY KEY,
@@ -499,7 +451,6 @@ def obtener_stock():
         """
         cursor.execute(create_stock_query)
         conn.commit()
-
         query_cols_stock = """
             SELECT COLUMN_NAME
             FROM information_schema.COLUMNS
@@ -507,13 +458,11 @@ def obtener_stock():
         """
         cursor.execute(query_cols_stock, (db_name, stock_table))
         stock_cols_existing = {row['COLUMN_NAME'] for row in cursor.fetchall()}
-
         for col in cols:
             if col not in stock_cols_existing:
                 alter_query = f"ALTER TABLE {stock_table} ADD COLUMN `{col}` INT DEFAULT 0;"
                 cursor.execute(alter_query)
                 conn.commit()
-
         columns_list = ', '.join([f"`{col}`" for col in cols])
         placeholders = ', '.join(['%s'] * len(cols))
         values = [stock[col] for col in cols]
@@ -525,11 +474,9 @@ def obtener_stock():
         """
         cursor.execute(insert_query, values)
         conn.commit()
-
         cursor.execute(f"SELECT * FROM {stock_table} WHERE id = 1;")
         stock_row = cursor.fetchone()
         return jsonify(stock_row), 200
-
     except Exception as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
@@ -540,13 +487,11 @@ def obtener_stock():
 # ---------------------------------------------------------
 # ENDPOINTS PARA SOLICITUDES
 # ---------------------------------------------------------
-
 @app.route('/api/solicitud', methods=['POST'])
 def crear_solicitud():
     data = request.get_json()
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
-
     solicitante = data.get('solicitante')
     grupo = data.get('grupo')
     ruc = data.get('ruc')
@@ -554,16 +499,12 @@ def crear_solicitud():
     cantidad_packs = data.get('cantidad_packs', 0)
     productos = data.get('productos', [])
     catalogos = data.get('catalogos', "")
-
     if not solicitante or not grupo or not ruc or not fecha_visita:
         return jsonify({"error": "Faltan campos requeridos: solicitante, grupo, ruc, fecha_visita."}), 400
-
     productos_str = json.dumps(productos)
-
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
-
     cursor = conn.cursor()
     try:
         create_table_sql = """
@@ -582,7 +523,6 @@ def crear_solicitud():
         """
         cursor.execute(create_table_sql)
         conn.commit()
-
         insert_sql = """
             INSERT INTO inventario_solicitudes
             (solicitante, grupo, ruc, fecha_visita, cantidad_packs, productos, catalogos)
@@ -591,9 +531,7 @@ def crear_solicitud():
         values = (solicitante, grupo, ruc, fecha_visita, cantidad_packs, productos_str, catalogos)
         cursor.execute(insert_sql, values)
         conn.commit()
-
         nuevo_id = cursor.lastrowid
-
         solicitud_data = {
             "id": nuevo_id,
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -606,11 +544,8 @@ def crear_solicitud():
             "catalogos": catalogos,
             "status": "pending"
         }
-
         send_email_solicitud(solicitud_data)
-
         return jsonify({"message": "Solicitud creada exitosamente", "id": nuevo_id}), 201
-
     except Error as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
@@ -623,7 +558,6 @@ def obtener_solicitudes():
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
-
     status_param = request.args.get('status')
     id_param = request.args.get('id')
     cursor = conn.cursor(dictionary=True)
@@ -631,18 +565,14 @@ def obtener_solicitudes():
         base_query = "SELECT * FROM inventario_solicitudes"
         conditions = []
         values = []
-
         if status_param:
             conditions.append("status = %s")
             values.append(status_param)
-
         if id_param:
             conditions.append("id = %s")
             values.append(id_param)
-
         if conditions:
             base_query += " WHERE " + " AND ".join(conditions)
-
         base_query += " ORDER BY timestamp DESC"
         cursor.execute(base_query, tuple(values))
         rows = cursor.fetchall()
@@ -658,48 +588,33 @@ def confirmar_solicitud(solicitud_id):
     data = request.get_json()
     if not data:
         return jsonify({"error": "No se proporcionaron datos en formato JSON."}), 400
-
     confirmador = data.get('confirmador')
     observaciones = data.get('observaciones', "")
     productos_finales = data.get('productos', {})
-
     if not confirmador:
         return jsonify({"error": "El campo 'confirmador' es requerido."}), 400
-
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
-
     cursor = conn.cursor(dictionary=True)
     try:
         cursor.execute("SELECT status, grupo FROM inventario_solicitudes WHERE id = %s", (solicitud_id,))
         solicitud = cursor.fetchone()
         if not solicitud:
             return jsonify({"error": "La solicitud no existe."}), 404
-
         if solicitud['status'] != 'pending':
-            return jsonify({
-                "error": f"La solicitud no está pendiente (status actual: {solicitud['status']})."
-            }), 400
-
+            return jsonify({"error": f"La solicitud no está pendiente (status actual: {solicitud['status']})."}), 400
         grupo = solicitud['grupo']
         conf_table = "inventario_solicitudes_conf"
-
         productos_json = json.dumps(productos_finales) if productos_finales else None
         insert_sql = f"""
             INSERT INTO {conf_table} (solicitud_id, confirmador, observaciones, productos, grupo)
             VALUES (%s, %s, %s, %s, %s)
         """
         cursor.execute(insert_sql, (solicitud_id, confirmador, observaciones, productos_json, grupo))
-
-        cursor.execute(
-            "UPDATE inventario_solicitudes SET status = 'confirmed' WHERE id = %s",
-            (solicitud_id,)
-        )
-
+        cursor.execute("UPDATE inventario_solicitudes SET status = 'confirmed' WHERE id = %s", (solicitud_id,))
         conn.commit()
         return jsonify({"message": "Solicitud confirmada exitosamente"}), 200
-
     except Error as e:
         conn.rollback()
         print(f"Error en confirmación: {str(e)}")
@@ -713,7 +628,6 @@ def obtener_confirmaciones():
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Error de conexión a la base de datos"}), 500
-
     cursor = conn.cursor(dictionary=True)
     try:
         query = "SELECT * FROM inventario_solicitudes_conf ORDER BY timestamp DESC;"
@@ -727,10 +641,6 @@ def obtener_confirmaciones():
         conn.close()
 
 def ensure_column_exists(cursor, table_name, column_name):
-    """
-    Verifica si una columna existe en la tabla dada (table_name)
-    y la crea si no existe.
-    """
     try:
         db_name = DB_CONFIG['database']
         query_check = """
@@ -739,14 +649,12 @@ def ensure_column_exists(cursor, table_name, column_name):
         """
         cursor.execute(query_check, (db_name, table_name, column_name))
         (existe,) = cursor.fetchone()
-
         if existe == 0:
             print(f"Creando columna {column_name} en tabla {table_name}")
             query_alter = f"ALTER TABLE {table_name} ADD COLUMN `{column_name}` INT DEFAULT 0;"
             cursor.execute(query_alter)
             return True
         return False
-
     except Error as e:
         print(f"Error al verificar/crear columna {column_name}: {str(e)}")
         raise
